@@ -1,0 +1,2 @@
+rootProject.name = 'bsmart_jpos_scale'
+include "JposScale"

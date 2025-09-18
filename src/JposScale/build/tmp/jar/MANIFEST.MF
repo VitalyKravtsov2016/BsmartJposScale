@@ -1,0 +1,7 @@
+Manifest-Version: 1.0
+Implementation-Title: BSmart.JavaPOS
+Implementation-Version: 1.12
+provider: gradle
+Class-Path: jpos113.jar jpos113-controls.jar log4j-1.2.15.jar xerces.j
+ ar nrjavaserial-5.2.1.jar
+
