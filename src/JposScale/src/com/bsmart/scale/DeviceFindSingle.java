@@ -6,7 +6,7 @@ import com.bsmart.IDevice;
 import com.bsmart.tools.StringParams;
 import com.bsmart.port.GnuSerialPort;
 import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.core.Logger;
+import org.apache.logging.log4j.Logger;
 
 // Single thread device find
 public class DeviceFindSingle implements Runnable {
@@ -16,7 +16,7 @@ public class DeviceFindSingle implements Runnable {
     private boolean started = false;
     private Vector items = new Vector();
     private final SmScale driver = SmScale.instance;
-    private final Logger logger = Logger.getLogger(DeviceFindSingle.class);
+    private final Logger logger = LogManager.getLogger(DeviceFindSingle.class);
 
     public DeviceFindSingle() {
     }

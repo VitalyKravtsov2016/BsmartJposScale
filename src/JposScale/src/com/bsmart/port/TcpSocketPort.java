@@ -5,15 +5,15 @@ import com.bsmart.tools.Logger2;
 import java.io.*;
 import java.net.*;
 import java.util.*;
+import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.core.Logger;
 
 
 /**
  * @author V.Kravtsov
  */
 public class TcpSocketPort implements SerialPort {
-    private static Logger logger = Logger.getLogger(TcpSocketPort.class);
+    private static Logger logger = LogManager.getLogger(TcpSocketPort.class);
 
     public String portName;
     public int readTimeout = 1000;

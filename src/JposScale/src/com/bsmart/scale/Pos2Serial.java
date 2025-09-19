@@ -4,13 +4,13 @@ import com.bsmart.IDevice;
 import com.bsmart.DeviceError;
 import com.bsmart.ShtrihMProtocolSerial;
 import com.bsmart.port.GnuSerialPort;
+import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.core.Logger;
 
 public class Pos2Serial extends ScaleSerial {
 
     private ShtrihMProtocolSerial protocol = null;
-    private final Logger logger = Logger.getLogger(Pos2Serial.class);
+    private final Logger logger = LogManager.getLogger(Pos2Serial.class);
 
     // //////////////////////////////////////////////////////////////////////////
     // Scale command code constants

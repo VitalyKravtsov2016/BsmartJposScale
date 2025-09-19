@@ -1,7 +1,7 @@
 package com.bsmart.scale;
 
+import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.core.Logger;
 
 import com.bsmart.IDevice;
 import com.bsmart.DeviceError;
@@ -15,7 +15,7 @@ public class ScaleSerial implements IScale, IDevice {
 
     private SerialPort serialPort = null;
     protected StringParams params = new StringParams();
-    private final Logger logger = Logger.getLogger(ScaleSerial.class);
+    private final Logger logger = LogManager.getLogger(ScaleSerial.class);
 
     public String getErrorText(int error) {
         switch (error) {

@@ -7,8 +7,8 @@ import java.nio.ByteBuffer;
 import java.util.Enumeration;
 import java.util.LinkedList;
 import java.util.Vector;
+import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.core.Logger;
 import gnu.io.UnsupportedCommOperationException;
 
 import com.bsmart.IDevice;
@@ -19,7 +19,7 @@ import com.bsmart.port.SerialPort;
 
 public class GnuSerialPort implements SerialPort {
 
-    private final Logger logger = Logger.getLogger(GnuSerialPort.class);
+    private final Logger logger = LogManager.getLogger(GnuSerialPort.class);
 
     private final int bufferSize = 2048;
     private gnu.io.SerialPort port;

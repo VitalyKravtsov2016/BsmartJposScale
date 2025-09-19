@@ -4,8 +4,8 @@ import java.util.List;
 import java.util.Vector;
 import java.util.ArrayList;
 
+import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.core.Logger;
 import com.bsmart.jpos.JposPropertyReader;
 
 import com.bsmart.IDevice;
@@ -44,7 +44,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
      *
      */
     private static final long serialVersionUID = 6309237509625068100L;
-    private final Logger logger = Logger.getLogger(ScaleService.class);
+    private final Logger logger = LogManager.getLogger(ScaleService.class);
     private final int S_CLOSED = 0;
     private final int S_OPENED = 1;
     private final int S_CLAIMED = 2;

@@ -14,11 +14,11 @@ import com.bsmart.scale.DeviceMetrics;
 import com.bsmart.scale.CalibrationStatus;
 import com.bsmart.port.GnuSerialPort;
 import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.core.Logger;
+import org.apache.logging.log4j.Logger;
 
 public class SmScale {
 
-    private final Logger logger = Logger.getLogger(SmScale.class);
+    private final Logger logger = LogManager.getLogger(SmScale.class);
 
     private int pointNumber = 1;
     private String portName = "COM1";

@@ -6,8 +6,8 @@ import com.bsmart.scale.ScaleCommand;
 import com.bsmart.scale.ScaleSerial;
 import com.bsmart.port.SerialPort;
 import com.bsmart.tools.Logger2;
+import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.core.Logger;
 
 /* 
  * Протокол Штрих-М по которому работают ФРы и Весы 

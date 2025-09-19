@@ -30,6 +30,8 @@ dependencies {
 
     compile 'javapos:javapos:1.14.2',
             'xerces:xercesImpl:2.12.2',
+			'log4j-api:log4j-api:2.25.1',
+			'log4j-core:log4j-core:2.25.1',
 			'nrjavaserial:nrjavaserial:3.9.3'
 
 	

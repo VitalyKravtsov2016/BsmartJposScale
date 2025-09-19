@@ -5,8 +5,8 @@ import java.util.Vector;
 import com.bsmart.IDevice;
 import com.bsmart.DeviceError;
 import com.bsmart.port.GnuSerialPort;
+import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.core.Logger;
 
 // Multithread device find 
 // Not working, because RXTX 2.1.7r2 is not thread safe
@@ -16,7 +16,7 @@ public class DeviceFindMulti {
 	private boolean started = false;
 	private Vector items = new Vector();
 	private final SmScale driver = SmScale.instance;
-	private final Logger logger = Logger.getLogger(DeviceFindMulti.class);
+	private final Logger logger = LogManager.getLogger(DeviceFindMulti.class);
 	private int startedCount = 0;
 
 	public DeviceFindMulti() {

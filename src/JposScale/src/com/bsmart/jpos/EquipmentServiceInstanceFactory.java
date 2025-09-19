@@ -9,13 +9,13 @@ import jpos.JposException;
 import jpos.config.JposEntry;
 import jpos.loader.JposServiceInstance;
 import jpos.loader.JposServiceInstanceFactory;
+import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.core.Logger;
 
 public final class EquipmentServiceInstanceFactory extends Object 
     implements JposServiceInstanceFactory, JposConst {
 	
-        static Logger logger = Logger.getLogger(EquipmentServiceInstanceFactory.class);
+        static Logger logger = LogManager.getLogger(EquipmentServiceInstanceFactory.class);
     
 	public JposServiceInstance createInstance(String logicalName, JposEntry entry)
 			throws JposException {
