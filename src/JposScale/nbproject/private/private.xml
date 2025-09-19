@@ -3,14 +3,21 @@
     <editor-bookmarks xmlns="http://www.netbeans.org/ns/editor-bookmarks/2" lastBookmarkId="0"/>
     <open-files xmlns="http://www.netbeans.org/ns/projectui-open-files/2">
         <group>
-            <file>file:/D:/projects/JposScale/src/JposScale/src/com/bsmart/scalecalib/Page.java</file>
-            <file>file:/D:/projects/JposScale/src/JposScale/src/com/bsmart/scalecalib/Page1.java</file>
-            <file>file:/D:/projects/JposScale/src/JposScale/src/com/bsmart/scale/SmScale.java</file>
-            <file>file:/D:/projects/JposScale/src/JposScale/src/com/bsmart/scalecalib/MainDialog.java</file>
-            <file>file:/D:/projects/JposScale/src/JposScale/src/com/bsmart/scale/ScaleWeight.java</file>
-            <file>file:/D:/projects/JposScale/src/JposScale/src/com/bsmart/test/ConsoleTest.java</file>
-            <file>file:/D:/projects/JposScale/src/JposScale/src/com/bsmart/scale/ScaleStatus.java</file>
-            <file>file:/D:/projects/JposScale/src/JposScale/src/com/bsmart/scaletst/ConnectionPage.java</file>
+            <file>file:/D:/projects/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/jpos/JposPropertyReader.java</file>
+            <file>file:/D:/projects/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/scalecalib/DeviceFindMulti.java</file>
+            <file>file:/D:/projects/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/scale/ScaleSerial.java</file>
+            <file>file:/D:/projects/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/port/GnuSerialPort.java</file>
+            <file>file:/D:/projects/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/jpos/scale/ScaleService.java</file>
+            <file>file:/D:/projects/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/scale/Pos2Serial.java</file>
+            <file>file:/D:/projects/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/scalecalib/DeviceFindSingle.java</file>
+            <file>file:/D:/projects/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/ShtrihMProtocolSerial.java</file>
+            <file>file:/D:/projects/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/scale/SmScale.java</file>
+            <file>file:/D:/projects/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/scalecalib/SmScale.java</file>
+            <file>file:/D:/projects/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/tools/Logger2.java</file>
+            <file>file:/D:/projects/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/jpos/EquipmentServiceInstanceFactory.java</file>
+            <file>file:/D:/projects/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/scale/DeviceFindMulti.java</file>
+            <file>file:/D:/projects/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/port/TcpSocketPort.java</file>
+            <file>file:/D:/projects/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/scale/DeviceFindSingle.java</file>
         </group>
     </open-files>
 </project-private>

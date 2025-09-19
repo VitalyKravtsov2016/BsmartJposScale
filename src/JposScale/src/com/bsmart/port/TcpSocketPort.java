@@ -1,10 +1,12 @@
 package com.bsmart.port;
 
 import com.bsmart.tools.Logger2;
+
 import java.io.*;
 import java.net.*;
 import java.util.*;
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Logger;
 
 
 /**

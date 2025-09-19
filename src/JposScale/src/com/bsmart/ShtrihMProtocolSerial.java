@@ -6,7 +6,8 @@ import com.bsmart.scale.ScaleCommand;
 import com.bsmart.scale.ScaleSerial;
 import com.bsmart.port.SerialPort;
 import com.bsmart.tools.Logger2;
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Logger;
 
 /* 
  * Протокол Штрих-М по которому работают ФРы и Весы 
@@ -17,7 +18,7 @@ public class ShtrihMProtocolSerial {
     private static final int maxENQCount = 1;
     private int byteTimeout = 100;
     private final SerialPort serialPort;
-    private final Logger logger = Logger.getLogger(ShtrihMProtocolSerial.class);
+    private final Logger logger = LogManager.getLogger(ShtrihMProtocolSerial.class);
 
     public ShtrihMProtocolSerial(SerialPort serialPort) {
         this.serialPort = serialPort;

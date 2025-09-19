@@ -1,6 +1,7 @@
 package com.bsmart.scale;
 
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Logger;
 
 import com.bsmart.IDevice;
 import com.bsmart.DeviceError;

@@ -4,7 +4,8 @@ package com.bsmart.jpos;
 import jpos.JposConst;
 import jpos.JposException;
 import jpos.config.JposEntry;
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Logger;
 
 public class JposPropertyReader implements JposConst {
 	

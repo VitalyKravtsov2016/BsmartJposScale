@@ -13,7 +13,8 @@ import com.bsmart.scale.ChannelParams;
 import com.bsmart.scale.DeviceMetrics;
 import com.bsmart.scale.CalibrationStatus;
 import com.bsmart.port.GnuSerialPort;
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Logger;
 
 public class SmScale {
 

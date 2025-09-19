@@ -1,6 +1,5 @@
 package com.bsmart.port;
 
-import org.apache.log4j.Logger;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -8,6 +7,8 @@ import java.nio.ByteBuffer;
 import java.util.Enumeration;
 import java.util.LinkedList;
 import java.util.Vector;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Logger;
 import gnu.io.UnsupportedCommOperationException;
 
 import com.bsmart.IDevice;

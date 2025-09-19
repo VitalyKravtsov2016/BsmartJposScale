@@ -3,7 +3,8 @@ package com.bsmart.tools;
 /**
  * @author V.Kravtsov
  */
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Logger;
 
 public class Logger2 {
 

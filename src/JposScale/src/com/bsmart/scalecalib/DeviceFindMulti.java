@@ -5,7 +5,8 @@ import java.util.Vector;
 import com.bsmart.IDevice;
 import com.bsmart.scale.Pos2Serial;
 import com.bsmart.port.GnuSerialPort;
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Logger;
 
 // Multithread device find 
 // Not working, because RXTX 2.1.7r2 is not thread safe

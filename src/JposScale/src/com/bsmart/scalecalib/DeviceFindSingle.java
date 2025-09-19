@@ -6,7 +6,8 @@ import com.bsmart.IDevice;
 import com.bsmart.tools.StringParams;
 import com.bsmart.scale.Pos2Serial;
 import com.bsmart.port.GnuSerialPort;
-import org.apache.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.Logger;
 
 // Single thread device find
 public class DeviceFindSingle implements Runnable {

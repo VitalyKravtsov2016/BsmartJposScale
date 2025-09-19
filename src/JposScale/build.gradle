@@ -27,11 +27,10 @@ repositories {
 }
 
 dependencies {
-    compile 'jpos:jpos113:1.13',
-            'jpos:jpos113-controls:1.13',
-            'log4j:log4j:1.2.15',
-            'xerces:xerces',
-	    'nrjavaserial:nrjavaserial:5.2.1'
+
+    compile 'javapos:javapos:1.14.2',
+            'xerces:xercesImpl:2.12.2',
+			'nrjavaserial:nrjavaserial:3.9.3'
 
 	
     testCompile group: 'org.hamcrest', name: 'hamcrest-core', version: '1.3'
