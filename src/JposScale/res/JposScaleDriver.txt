@@ -12,13 +12,12 @@
     History.txt - история версий драйвера
     JposScaleDriver.txt - установка дрйавера
     jpos.xml - параметры драйвера
-    jpos113-controls.jar - Control Objects (CO) Jpos
-    jpos113.jar - интерфейсы Jpos
-    log4j-1.2.15.jar - библиотека записи лога
-    xerces.jar - библиотека для чтения XML. 
+    javapos-1.14.2.jar - Control Objects (CO) и интерфейсы JPOS
+    log4j-api-2.25.1.jar;log4j-core-2.25.1.jar - библиотеки записи лога
+    xercesImpl-2.12.2.jar - библиотека для чтения XML. 
       Нужна для загрузки конфигурации драйвера, файл jpos.xml
     log4j.xml - параметры записи лог-файлов
-    nrjavaserial-5.2.1.jar - библиотека для доступа к последовательному порту
+    nrjavaserial-3.9.3.jar - библиотека для доступа к последовательному порту
     smscale.jar - библиотека работы с весами
     test.bat - запуск теста весов в Windows
     test.sh - запуск теста весов в Linux
@@ -57,7 +56,8 @@
        setserial /dev/ttyACM0
        
     3.4. Можно запустить тест драйвера jpos:
-       java -cp ".:jpos113.jar:log4j-1.2.15.jar:RXTXcomm.jar:xerces.jar:smscale.jar" -Djava.library.path=. com.bsmart.ScaleTests
+       java -cp .;smscale.jar;javapos-1.14.2.jar;log4j-api-2.25.1.jar;log4j-core-2.25.1.jar;
+	   nrjavaserial-3.9.3.jar;xercesImpl-2.12.2.jar -Djava.library.path=. com.bsmart.ScaleTests
 
 ----------------------------------------------------------
   4. Параметры драйвера
