@@ -6,6 +6,20 @@
       
 ********************************************************************************
 
+  October, 14 2025 13:30
+  deviceServiceVersion = 1013016
+
+  [-] Fixed error with CRLF in test.sh file
+  
+********************************************************************************
+
+  September, 25 2025 13:30
+  deviceServiceVersion = 1013015
+
+  [+] Fixed start commands in documentation
+  
+********************************************************************************
+
   September, 19 2025 13:20
   deviceServiceVersion = 1013014
 
