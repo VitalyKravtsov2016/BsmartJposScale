@@ -872,8 +872,10 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                 return weight.weight;
             }
 
-            if (System.currentTimeMillis() > (startTime + timeout)) {
-                throw new JposException(JPOS_E_TIMEOUT, "Истекло время ожидания фиксированного веса");
+            if (System.currentTimeMillis() > (startTime + timeout)) 
+            {
+                return weight.weight;
+                //throw new JposException(JPOS_E_TIMEOUT, "Истекло время ожидания фиксированного веса");
             }
             Thread.sleep(100);
         }

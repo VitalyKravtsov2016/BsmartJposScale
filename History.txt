@@ -6,6 +6,14 @@
       
 ********************************************************************************
 
+  October, 17 2025 13:50
+  deviceServiceVersion = 1013018
+
+  [-] Removed exception on read stable weight timeout
+  [-] ScaleTests, changed weight format to 0.000 kg
+  
+********************************************************************************
+
   October, 14 2025 13:30
   deviceServiceVersion = 1013016
 

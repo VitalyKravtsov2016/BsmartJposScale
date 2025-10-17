@@ -45,7 +45,8 @@ public class ScaleTests implements DataListener {
             while (true) {
                 try {
                     scale.readWeight(weight, 1000);
-                    System.out.println("Weight (sync): " + (float) weight[0] / 1000.0f + " kg.");
+                    System.out.println(String.format("Weight (sync): %.3f  kg.", 
+                        (float) weight[0] / 1000.0f));
                 } catch (Exception e) {
                     System.out.println("ERROR: " + e.getMessage());
                 }
@@ -61,7 +62,8 @@ public class ScaleTests implements DataListener {
 
     @Override
     public void dataOccurred(DataEvent event) {
-        System.out.println("Weight (async): " + (float) event.getStatus() / 1000.0f + " kg.");
+        System.out.println(String.format("Weight (async): %.3f kg.", 
+            (float) event.getStatus() / 1000.0f));
 
     }
 
