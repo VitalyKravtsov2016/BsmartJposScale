@@ -64,22 +64,31 @@ public class GnuSerialPort implements SerialPort {
             return;
         }
         logger.debug("open(" + portName + ")");
-        gnu.io.CommPortIdentifier portIdentifier;
-        portIdentifier = gnu.io.CommPortIdentifier.getPortIdentifier(portName);
-        if (portIdentifier == null) {
-            throw new gnu.io.NoSuchPortException();
+        try
+        {
+            gnu.io.CommPortIdentifier portIdentifier;
+            portIdentifier = gnu.io.CommPortIdentifier.getPortIdentifier(portName);
+            if (portIdentifier == null) 
+            {
+                throw new gnu.io.NoSuchPortException();
+            }
+            port = (gnu.io.SerialPort) portIdentifier.open(appName,
+                    openTimeout);
+            if (port == null) {
+                throw new gnu.io.NoSuchPortException();
+            }
+            port.setSerialPortParams(this.baudRate, this.dataBits,
+                    this.stopBits, this.parity);
+            port.setInputBufferSize(1024);
+            port.setOutputBufferSize(1024);
+            port.setFlowControlMode(gnu.io.SerialPort.FLOWCONTROL_NONE);
+            port.enableReceiveTimeout(openTimeout);
         }
-        port = (gnu.io.SerialPort) portIdentifier.open(appName,
-                openTimeout);
-        if (port == null) {
-            throw new gnu.io.NoSuchPortException();
+        catch (gnu.io.NoSuchPortException e)
+        {
+            String errorText = IDevice.TEXT_ERROR_NOTSUCHPORT + ", " + portName;
+            throw new DeviceError(IDevice.ERROR_NOSUCHPORT, errorText);
         }
-        port.setSerialPortParams(this.baudRate, this.dataBits,
-                this.stopBits, this.parity);
-        port.setInputBufferSize(1024);
-        port.setOutputBufferSize(1024);
-        port.setFlowControlMode(gnu.io.SerialPort.FLOWCONTROL_NONE);
-        port.enableReceiveTimeout(openTimeout);
     }
 
     public void setTimeout(int timeout) throws Exception {

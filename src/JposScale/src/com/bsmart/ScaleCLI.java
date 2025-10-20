@@ -16,14 +16,17 @@ import com.bsmart.scale.SmScale;
 
 public class ScaleCLI {
     private final Pos2Serial scale;
-    private boolean connected = false;
 
     public ScaleCLI() {
         this.scale = new Pos2Serial();
         loadSettings();
     }
 
-    private void loadSettings() {
+    public Preferences getPreferences() {
+        return Preferences.userNodeForPackage(SmScale.class);
+    }
+    
+    public void loadSettings() {
         try {
             Preferences prefs = Preferences.userNodeForPackage(SmScale.class);
             int portType = prefs.getInt(IDevice.PARAM_PORTTYPE, IDevice.PARAM_PORTTYPE_SERIAL);
@@ -128,6 +131,7 @@ public class ScaleCLI {
                         System.exit(1);
                     }
                     cli.setPort(args[1]);
+                    cli.saveSettings();
                     break;
                 case "set-baudrate":
                     if (args.length < 2) {
@@ -135,10 +139,9 @@ public class ScaleCLI {
                         System.exit(1);
                     }
                     cli.setBaudrate(Integer.parseInt(args[1]));
-                    break;
-                case "save-settings":
                     cli.saveSettings();
                     break;
+                    
                 default:
                     System.err.println("Неизвестная команда: " + command);
                     printUsage();
@@ -173,28 +176,23 @@ public class ScaleCLI {
         System.out.println("  adc-value                  - Прочитать АЦП");
         System.out.println("  set-port <порт>            - Установить порт");
         System.out.println("  set-baudrate <скорость>    - Установить скорость");
-        System.out.println("  save-settings              - Сохранить настройки");
     }
 
     private void connect() throws Exception {
         scale.connect();
-        connected = true;
         System.out.println("CONNECTED");
     }
 
     private void disconnect() {
         try {
-            if (connected) {
-                scale.disconnect();
-                connected = false;
-            }
+            scale.disconnect();
         } catch (Exception e) {
             // Игнорируем ошибки при отключении
         }
     }
 
     private void readWeight() throws Exception {
-        checkConnection();
+        connect();
         ScaleWeight weight = scale.getWeight();
         System.out.println("WEIGHT:" + weight.getWeight());
         System.out.println("TARE:" + weight.getTare());
@@ -202,19 +200,19 @@ public class ScaleCLI {
     }
 
     private void setZero() throws Exception {
-        checkConnection();
+        connect();
         scale.zero();
         System.out.println("ZERO_SET");
     }
 
     private void setTare() throws Exception {
-        checkConnection();
+        connect();
         scale.tara();
         System.out.println("TARE_SET");
     }
 
     private void readDeviceInfo() throws Exception {
-        checkConnection();
+        connect();
         scale.readDeviceMetrics();
         DeviceMetrics metrics = scale.getDeviceMetrics();
         
@@ -227,7 +225,7 @@ public class ScaleCLI {
     }
 
     private void readChannelInfo() throws Exception {
-        checkConnection();
+        connect();
         
         scale.readChannelCount();
         int channelCount = scale.getChannelCount();
@@ -247,7 +245,7 @@ public class ScaleCLI {
     }
 
     private void changePassword(String newPassword) throws Exception {
-        checkConnection();
+        connect();
         
         if (newPassword.length() != 4 || !newPassword.matches("\\d{4}")) {
             throw new Exception("Пароль должен состоять из 4 цифр");
@@ -258,44 +256,44 @@ public class ScaleCLI {
     }
 
     private void readExchangeParams() throws Exception {
-        checkConnection();
+        connect();
         scale.readExchangeParams(0);
         System.out.println("BAUD_RATE:" + scale.getExchangeBaudRate());
         System.out.println("TIMEOUT:" + scale.getExchangeByteTimeout());
     }
 
     private void writeExchangeParams(int baudRate, int timeout) throws Exception {
-        checkConnection();
+        connect();
         scale.writeExchangeParams(0, baudRate, timeout);
         System.out.println("EXCHANGE_PARAMS_SET");
     }
 
     private void selectChannel(int channel) throws Exception {
-        checkConnection();
+        connect();
         scale.selectChannel(channel);
         System.out.println("CHANNEL_SELECTED:" + channel);
     }
 
     private void enableChannel(boolean enable) throws Exception {
-        checkConnection();
+        connect();
         scale.enableChannel(enable);
         System.out.println("CHANNEL_" + (enable ? "ENABLED" : "DISABLED"));
     }
 
     private void startCalibration() throws Exception {
-        checkConnection();
+        connect();
         scale.startCalibration();
         System.out.println("CALIBRATION_STARTED");
     }
 
     private void stopCalibration() throws Exception {
-        checkConnection();
+        connect();
         scale.stopCalibration();
         System.out.println("CALIBRATION_STOPPED");
     }
 
     private void readCalibrationStatus() throws Exception {
-        checkConnection();
+        connect();
         scale.readCalibrationStatus();
         CalibrationStatus status = scale.getCalibrationStatus();
         System.out.println("CALIBRATION_STATUS:" + status.getStatus());
@@ -304,22 +302,22 @@ public class ScaleCLI {
     }
 
     private void readADCValue() throws Exception {
-        checkConnection();
+        connect();
         scale.readADCValue();
         System.out.println("ADC_VALUE:" + scale.getADCValue());
     }
 
-    private void setPort(String port) {
+    public void setPort(String port) {
         scale.setParam(IDevice.PARAM_PORTNAME, port);
         System.out.println("PORT_SET:" + port);
     }
 
-    private void setBaudrate(int baudrate) {
+    public void setBaudrate(int baudrate) {
         scale.setParam(IDevice.PARAM_BAUDRATE, String.valueOf(baudrate));
         System.out.println("BAUDRATE_SET:" + baudrate);
     }
 
-    private void saveSettings() {
+    public void saveSettings() {
         try {
             Preferences prefs = Preferences.userNodeForPackage(ScaleCLI.class);
             prefs.put(IDevice.PARAM_PORTTYPE, scale.getParam(IDevice.PARAM_PORTTYPE));
@@ -328,15 +326,10 @@ public class ScaleCLI {
             prefs.putInt(IDevice.PARAM_OPEN_TIMEOUT, Integer.parseInt(scale.getParam(IDevice.PARAM_OPEN_TIMEOUT)));
             prefs.putInt(IDevice.PARAM_READ_TIMEOUT, Integer.parseInt(scale.getParam(IDevice.PARAM_READ_TIMEOUT)));
             prefs.put(IDevice.PARAM_PASSWORD, scale.getParam(IDevice.PARAM_PASSWORD));
+            prefs.flush();            
             System.out.println("SETTINGS_SAVED");
         } catch (Exception e) {
             System.err.println("Ошибка сохранения настроек: " + e.getMessage());
-        }
-    }
-
-    private void checkConnection() throws Exception {
-        if (!connected) {
-            throw new Exception("Не подключено к весам. Сначала выполните подключение.");
         }
     }
 }
