@@ -102,7 +102,8 @@ public class ScaleSerial implements IScale, IDevice {
 
     public String getParam(String name) {
         logger.debug("getParam(" + name + ")");
-        return params.get(name);
+        String value = params.get(name);
+        return value;
     }
 
     public SerialPort getSerialPort() throws Exception {

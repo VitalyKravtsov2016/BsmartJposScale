@@ -6,7 +6,7 @@
       
 ********************************************************************************
 
-  October, 19 2025 10:55
+  October, 21 2025 15:55
   deviceServiceVersion = 1013019
 
   [+] Added command line utility ScaleCLI

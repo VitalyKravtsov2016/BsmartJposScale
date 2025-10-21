@@ -2,7 +2,6 @@
  *
  * @author User
  */
-
 package com.bsmart;
 
 import java.util.prefs.Preferences;
@@ -15,6 +14,7 @@ import com.bsmart.scale.CalibrationStatus;
 import com.bsmart.scale.SmScale;
 
 public class ScaleCLI {
+
     private final Pos2Serial scale;
 
     public ScaleCLI() {
@@ -25,10 +25,10 @@ public class ScaleCLI {
     public Preferences getPreferences() {
         return Preferences.userNodeForPackage(SmScale.class);
     }
-    
+
     public void loadSettings() {
         try {
-            Preferences prefs = Preferences.userNodeForPackage(SmScale.class);
+            Preferences prefs = getPreferences();
             int portType = prefs.getInt(IDevice.PARAM_PORTTYPE, IDevice.PARAM_PORTTYPE_SERIAL);
             String portName = prefs.get(IDevice.PARAM_PORTNAME, "/dev/ttyACM0");
             int baudRate = prefs.getInt(IDevice.PARAM_BAUDRATE, 9600);
@@ -57,7 +57,7 @@ public class ScaleCLI {
         }
 
         ScaleCLI cli = new ScaleCLI();
-        
+
         try {
             String command = args[0];
             switch (command) {
@@ -141,7 +141,7 @@ public class ScaleCLI {
                     cli.setBaudrate(Integer.parseInt(args[1]));
                     cli.saveSettings();
                     break;
-                    
+
                 default:
                     System.err.println("Неизвестная команда: " + command);
                     printUsage();
@@ -215,7 +215,7 @@ public class ScaleCLI {
         connect();
         scale.readDeviceMetrics();
         DeviceMetrics metrics = scale.getDeviceMetrics();
-        
+
         System.out.println("TYPE:" + metrics.getType());
         System.out.println("SUBTYPE:" + metrics.getSubType());
         System.out.println("VERSION:" + metrics.getMajorVersion() + "." + metrics.getMinorVersion());
@@ -226,14 +226,14 @@ public class ScaleCLI {
 
     private void readChannelInfo() throws Exception {
         connect();
-        
+
         scale.readChannelCount();
         int channelCount = scale.getChannelCount();
         System.out.println("CHANNEL_COUNT:" + channelCount);
-        
+
         scale.readChannelNumber();
         System.out.println("CURRENT_CHANNEL:" + scale.getChannelNumber());
-        
+
         for (int i = 0; i < channelCount; i++) {
             scale.readChannelParams(i);
             ChannelParams params = scale.getChannelParams();
@@ -246,11 +246,11 @@ public class ScaleCLI {
 
     private void changePassword(String newPassword) throws Exception {
         connect();
-        
+
         if (newPassword.length() != 4 || !newPassword.matches("\\d{4}")) {
             throw new Exception("Пароль должен состоять из 4 цифр");
         }
-        
+
         scale.writeAdminPassword(newPassword);
         System.out.println("PASSWORD_CHANGED");
     }
@@ -317,16 +317,29 @@ public class ScaleCLI {
         System.out.println("BAUDRATE_SET:" + baudrate);
     }
 
+    public String getPort() {
+        return scale.getParam(IDevice.PARAM_PORTNAME);
+    }
+
+    public String getScaleParam(String param) {
+        return scale.getParam(param);
+    }
+
+    public int getBaudrate() {
+        return Integer.valueOf(scale.getParam(IDevice.PARAM_BAUDRATE));
+    }
+
     public void saveSettings() {
         try {
-            Preferences prefs = Preferences.userNodeForPackage(ScaleCLI.class);
+            Preferences prefs = getPreferences();
             prefs.put(IDevice.PARAM_PORTTYPE, scale.getParam(IDevice.PARAM_PORTTYPE));
             prefs.put(IDevice.PARAM_PORTNAME, scale.getParam(IDevice.PARAM_PORTNAME));
             prefs.putInt(IDevice.PARAM_BAUDRATE, Integer.parseInt(scale.getParam(IDevice.PARAM_BAUDRATE)));
             prefs.putInt(IDevice.PARAM_OPEN_TIMEOUT, Integer.parseInt(scale.getParam(IDevice.PARAM_OPEN_TIMEOUT)));
             prefs.putInt(IDevice.PARAM_READ_TIMEOUT, Integer.parseInt(scale.getParam(IDevice.PARAM_READ_TIMEOUT)));
             prefs.put(IDevice.PARAM_PASSWORD, scale.getParam(IDevice.PARAM_PASSWORD));
-            prefs.flush();            
+            prefs.flush();
+            
             System.out.println("SETTINGS_SAVED");
         } catch (Exception e) {
             System.err.println("Ошибка сохранения настроек: " + e.getMessage());
