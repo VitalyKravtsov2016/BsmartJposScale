@@ -420,9 +420,11 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
     public void setDataEventEnabled(boolean enabled) throws JposException {
         logger.debug("setDataEventEnabled(" + String.valueOf(enabled) + ")");
-        dataEventEnabled = enabled;
-        if (dataEventEnabled){
-            events.notifyAll();
+        synchronized (events) {
+            dataEventEnabled = enabled;
+            if (dataEventEnabled) {
+                events.notifyAll();
+            }
         }
         logger.debug("setDataEventEnabled: OK");
     }
@@ -494,8 +496,10 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                     requests.notifyAll();
                 }
                 return;
+            } else
+            {
+                data[0] = (int) readWeightTimeout(timeout);
             }
-            data[0] = (int) readWeightTimeout(timeout);
         } catch (Exception e) {
             throw getJposException(e);
         }
@@ -552,22 +556,23 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         if (this.freezeEvents != freezeEvents) {
             this.freezeEvents = freezeEvents;
             if (freezeEvents) {
-                if (eventThread != null) 
-                {
+                if (eventThread != null) {
                     eventThread.interrupt();
                     synchronized (events) {
                         events.notifyAll();
                     }
-                    try{
+                    try {
                         eventThread.join();
-                    }catch(Exception e){
+                    } catch (Exception e) {
                         logger.error(e);
                     }
                     eventThread = null;
                 }
             } else {
-                eventThread = new Thread(new EventTarget(this));
-                eventThread.start();
+                if (eventThread == null) {
+                    eventThread = new Thread(new EventTarget(this));
+                    eventThread.start();
+                }
             }
         }
         logger.debug("setFreezeEvents: OK");
@@ -601,24 +606,20 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
     public void eventProc() {
         try {
-            while (!Thread.interrupted()) 
-            {
-                synchronized (events) 
-                {
+            synchronized (events) {
+                while (!Thread.interrupted()) {
                     int index = 0;
-                    while (index < events.size())
-                    {
+                    while (index < events.size()) {
                         JposEvent event = (JposEvent) events.get(index);
-                        if (!(event instanceof DataEvent)|| dataEventEnabled)
-                        {
+                        if (!(event instanceof DataEvent) || dataEventEnabled) {
                             events.remove(index);
                             fireJposEvent(event);
-                        } else{
+                        } else {
                             index++;
                         }
                     }
+                    events.wait();
                 }
-                events.wait();
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -738,11 +739,29 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                 setPowerState(JPOS_PS_ONLINE);
                 pollThread = new Thread(new PollTarget(this));
                 pollThread.start();
+                if (!freezeEvents && eventThread == null) {
+                    eventThread = new Thread(new EventTarget(this));
+                    eventThread.start();
+                }
             } else {
                 setPowerState(JPOS_PS_UNKNOWN);
-                pollThread.interrupt();
-                pollThread.join();
-                pollThread = null;
+                if (pollThread != null) {
+                    pollThread.interrupt();
+                    pollThread.join();
+                    pollThread = null;
+                }
+                if (eventThread != null) {
+                    eventThread.interrupt();
+                    synchronized (events) {
+                        events.notifyAll();
+                    }
+                    try {
+                        eventThread.join();
+                    } catch (Exception e) {
+                        logger.error(e);
+                    }
+                    eventThread = null;
+                }
             }
         } catch (Exception e) {
             throw getJposException(e);
