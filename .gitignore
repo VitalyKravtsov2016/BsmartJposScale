@@ -1,3 +1,10 @@
-/src/JposScale/dist/
+# Gradle
+.gradle/
+build/
+gradle-app.setting
+!gradle-wrapper.jar
+.gradletasknamecache
+
 *.class
+/src/JposScale/dist/
 /src/JposScale/build/

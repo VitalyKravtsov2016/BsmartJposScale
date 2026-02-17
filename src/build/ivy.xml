@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ivy-module version="2.0" xmlns:m="http://ant.apache.org/ivy/maven">
-  <info organisation="" module="bsmart_jpos_scale" revision="1.24" status="integration" default="true" publication="20260213143734"/>
+  <info organisation="" module="bsmart_jpos_scale" revision="1.25" status="integration" default="true" publication="20260217130222"/>
   <configurations>
     <conf name="archives" visibility="public"/>
     <conf name="compile" visibility="private"/>

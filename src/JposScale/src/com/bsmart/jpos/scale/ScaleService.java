@@ -629,19 +629,29 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     private void fireJposEvent(JposEvent event) 
     {
         if (eventsCallback == null) return;
+        
+        logger.debug("fireJposEvent, " + event);
         if (event instanceof StatusUpdateEvent) {
+            logger.debug("fireStatusUpdateEvent, " + (StatusUpdateEvent) event);
             eventsCallback.fireStatusUpdateEvent((StatusUpdateEvent) event);
         }
-        if (event instanceof DataEvent) {
+        if (event instanceof DataEvent) 
+        {
+            logger.debug("fireDataEvent, " + (DataEvent) event);
             eventsCallback.fireDataEvent((DataEvent) event);
         }
         if (event instanceof DirectIOEvent) {
+            logger.debug("fireDirectIOEvent, " + (DirectIOEvent) event);
             eventsCallback.fireDirectIOEvent((DirectIOEvent) event);
         }
-        if (event instanceof ErrorEvent) {
+        if (event instanceof ErrorEvent) 
+        {
+            logger.debug("fireErrorEvent, " + (ErrorEvent) event);
             eventsCallback.fireErrorEvent((ErrorEvent) event);
         }
-        if (event instanceof OutputCompleteEvent) {
+        if (event instanceof OutputCompleteEvent) 
+        {
+            logger.debug("fireOutputCompleteEvent, " + (OutputCompleteEvent) event);
             eventsCallback.fireOutputCompleteEvent((OutputCompleteEvent) event);
         }
     }
@@ -837,7 +847,8 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                 scaleLiveWeight = weight.weight;
             }
 
-            if (weight.status.isStable() && ((m_weight == null) || (m_weight.status.isStable()))) {
+            if ((m_weight == null) || (weight.status.isStable() != m_weight.status.isStable())) 
+            {
                 if (weight.status.isStable()) {
                     statusUpdateEvent(SCAL_SUE_STABLE_WEIGHT);
                 } else {
