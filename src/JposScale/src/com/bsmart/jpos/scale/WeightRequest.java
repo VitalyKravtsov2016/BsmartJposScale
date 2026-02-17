@@ -9,15 +9,21 @@ package com.bsmart.jpos.scale;
  *
  * @author Виталий
  */
-public class WeightRequest {
 
+class WeightRequest {
     private final int timeout;
+    private final long timestamp;
     
-    public WeightRequest(int timeout){
+    public WeightRequest(int timeout) {
         this.timeout = timeout;
+        this.timestamp = System.currentTimeMillis();
     }
     
-    public int getTimeout(){
+    public int getTimeout() {
         return timeout;
+    }
+    
+    public long getTimestamp() {
+        return timestamp;
     }
 }

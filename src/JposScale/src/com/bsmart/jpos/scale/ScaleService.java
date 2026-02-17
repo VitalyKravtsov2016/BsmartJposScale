@@ -1,8 +1,10 @@
 package com.bsmart.jpos.scale;
 
 import java.util.List;
-import java.util.Vector;
 import java.util.ArrayList;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
@@ -70,7 +72,8 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     private Thread weightThread = null;
     private long scaleLiveWeight = 0;
     private final List<JposEvent> events = new ArrayList<JposEvent>();
-    private final List<WeightRequest> requests = new ArrayList<WeightRequest>();
+    // Используем BlockingQueue вместо List с ручной синхронизацией
+    private final BlockingQueue<WeightRequest> requests = new LinkedBlockingQueue<>();
 
     public boolean getCapCompareFirmwareVersion() throws JposException {
         logger.debug("getCapCompareFirmwareVersion()");
@@ -320,6 +323,8 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         synchronized (events) {
             events.clear();
         }
+        // Очищаем также очередь запросов
+        requests.clear();
         logger.debug("clearInput: OK");
     }
 
@@ -341,13 +346,16 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
             weightThread = new Thread(new WeightTarget(this));
             weightThread.start();
         } else {
-            weightThread.interrupt();
-            try {
-                weightThread.join();
-            } catch (InterruptedException e) {
-                logger.error(e.getMessage());
+            if (weightThread != null) {
+                weightThread.interrupt();
+                try {
+                    weightThread.join(1000); // Добавляем таймаут
+                } catch (InterruptedException e) {
+                    logger.error(e.getMessage());
+                    Thread.currentThread().interrupt();
+                }
+                weightThread = null;
             }
-            weightThread = null;
         }
         logger.debug("setAsyncMode: OK");
     }
@@ -491,13 +499,10 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         checkEnabled();
         try {
             if (asyncMode) {
-                synchronized (requests) {
-                    requests.add(new WeightRequest(timeout));
-                    requests.notifyAll();
-                }
+                // Используем BlockingQueue - неблокирующая операция
+                requests.offer(new WeightRequest(timeout));
                 return;
-            } else
-            {
+            } else {
                 data[0] = (int) readWeightTimeout(timeout);
             }
         } catch (Exception e) {
@@ -562,7 +567,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                         events.notifyAll();
                     }
                     try {
-                        eventThread.join();
+                        eventThread.join(1000); // Добавляем таймаут
                     } catch (Exception e) {
                         logger.error(e);
                     }
@@ -610,7 +615,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                 while (!Thread.interrupted()) {
                     int index = 0;
                     while (index < events.size()) {
-                        JposEvent event = (JposEvent) events.get(index);
+                        JposEvent event = events.get(index);
                         if (!(event instanceof DataEvent) || dataEventEnabled) {
                             events.remove(index);
                             fireJposEvent(event);
@@ -618,40 +623,41 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                             index++;
                         }
                     }
-                    events.wait();
+                    try {
+                        events.wait();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
                 }
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            logger.error("eventProc error", e);
         }
     }
 
-    private void fireJposEvent(JposEvent event) 
-    {
+    private void fireJposEvent(JposEvent event) {
         if (eventsCallback == null) return;
         
         logger.debug("fireJposEvent, " + event);
         if (event instanceof StatusUpdateEvent) {
-            logger.debug("fireStatusUpdateEvent, " + (StatusUpdateEvent) event);
+            logger.debug("fireStatusUpdateEvent, " + event);
             eventsCallback.fireStatusUpdateEvent((StatusUpdateEvent) event);
         }
-        if (event instanceof DataEvent) 
-        {
-            logger.debug("fireDataEvent, " + (DataEvent) event);
+        if (event instanceof DataEvent) {
+            logger.debug("fireDataEvent, " + event);
             eventsCallback.fireDataEvent((DataEvent) event);
         }
         if (event instanceof DirectIOEvent) {
-            logger.debug("fireDirectIOEvent, " + (DirectIOEvent) event);
+            logger.debug("fireDirectIOEvent, " + event);
             eventsCallback.fireDirectIOEvent((DirectIOEvent) event);
         }
-        if (event instanceof ErrorEvent) 
-        {
-            logger.debug("fireErrorEvent, " + (ErrorEvent) event);
+        if (event instanceof ErrorEvent) {
+            logger.debug("fireErrorEvent, " + event);
             eventsCallback.fireErrorEvent((ErrorEvent) event);
         }
-        if (event instanceof OutputCompleteEvent) 
-        {
-            logger.debug("fireOutputCompleteEvent, " + (OutputCompleteEvent) event);
+        if (event instanceof OutputCompleteEvent) {
+            logger.debug("fireOutputCompleteEvent, " + event);
             eventsCallback.fireOutputCompleteEvent((OutputCompleteEvent) event);
         }
     }
@@ -679,20 +685,11 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         checkOpened();
         switch (scale.getType()) {
             case Pos2:
-                /*
-                 * logger.debug(
-                 * "<--getPhysicalDeviceDescription() Весы ШТРИХ-М POS2");
-                 */ return "Весы ШТРИХ-М POS2";
+                return "Весы ШТРИХ-М POS2";
             case Shtrih5:
-                /*
-                 * logger.debug(
-                 * "<--getPhysicalDeviceDescription() Весы ШТРИХ-М ШТРИХ5");
-                 */ return "Весы ШТРИХ-М ШТРИХ5";
+                return "Весы ШТРИХ-М ШТРИХ5";
             case Shtrih6:
-                /*
-                 * logger.debug(
-                 * "<--getPhysicalDeviceDescription() Весы ШТРИХ-М ШТРИХ6");
-                 */ return "Весы ШТРИХ-М ШТРИХ6";
+                return "Весы ШТРИХ-М ШТРИХ6";
         }
         logger.debug("getPhysicalDeviceDescription = Весы ШТРИХ-М");
         return "Весы ШТРИХ-М";
@@ -711,7 +708,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
         int result = JPOS_S_ERROR;
 
-        if (asyncMode && weightThread.isAlive()) {
+        if (asyncMode && weightThread != null && weightThread.isAlive()) {
             result = JPOS_S_BUSY;
         }
 
@@ -742,9 +739,10 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void setDeviceEnabled(boolean enabled) throws JposException {
         logger.debug("setDeviceEnabled(" + enabled + ")");
         checkClaimed();
-        state = enabled ? S_ENABLED : S_CLAIMED;
+        
         try {
             if (enabled) {
+                state = S_ENABLED;
                 readScaleWeight();
                 setPowerState(JPOS_PS_ONLINE);
                 pollThread = new Thread(new PollTarget(this));
@@ -754,24 +752,37 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                     eventThread.start();
                 }
             } else {
+                state = S_CLAIMED;
                 setPowerState(JPOS_PS_UNKNOWN);
+                
+                // Останавливаем pollThread
                 if (pollThread != null) {
                     pollThread.interrupt();
-                    pollThread.join();
+                    try {
+                        pollThread.join(1000);
+                    } catch (InterruptedException e) {
+                        logger.error("Error stopping pollThread", e);
+                        Thread.currentThread().interrupt();
+                    }
                     pollThread = null;
                 }
+                
+                // Останавливаем eventThread
                 if (eventThread != null) {
                     eventThread.interrupt();
                     synchronized (events) {
                         events.notifyAll();
                     }
                     try {
-                        eventThread.join();
+                        eventThread.join(1000);
                     } catch (Exception e) {
-                        logger.error(e);
+                        logger.error("Error stopping eventThread", e);
                     }
                     eventThread = null;
                 }
+                
+                // Очищаем очереди
+                requests.clear();
             }
         } catch (Exception e) {
             throw getJposException(e);
@@ -797,7 +808,9 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
     private void handleErrorEvent(ErrorEvent event) {
         logger.debug("handleErrorEvent(" + event + ")");
-        eventsCallback.fireErrorEvent(event);
+        if (eventsCallback != null) {
+            eventsCallback.fireErrorEvent(event);
+        }
         logger.debug("handleErrorEvent: OK");
     }
 
@@ -810,14 +823,14 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
     private void checkClaimed() throws JposException {
         if (state < S_CLAIMED) {
-            logger.debug("checkOpened = JPOS_E_NOTCLAIMED");
+            logger.debug("checkClaimed = JPOS_E_NOTCLAIMED");
             throw new JposException(JPOS_E_NOTCLAIMED);
         }
     }
 
     private void checkEnabled() throws JposException {
         if (state < S_ENABLED) {
-            logger.debug("checkOpened() JPOS_E_DISABLED");
+            logger.debug("checkEnabled() JPOS_E_DISABLED");
             throw new JposException(JPOS_E_DISABLED);
         }
     }
@@ -831,8 +844,11 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                 Thread.sleep(pollInterval);
             }
             logger.debug("Poll thread stop");
+        } catch (InterruptedException e) {
+            logger.debug("Poll thread interrupted");
+            Thread.currentThread().interrupt();
         } catch (Exception e) {
-            logger.error("Poll proc, ", e);
+            logger.error("Poll proc error", e);
         }
     }
 
@@ -847,8 +863,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                 scaleLiveWeight = weight.weight;
             }
 
-            if ((m_weight == null) || (weight.status.isStable() != m_weight.status.isStable())) 
-            {
+            if ((m_weight == null) || (weight.status.isStable() != m_weight.status.isStable())) {
                 if (weight.status.isStable()) {
                     statusUpdateEvent(SCAL_SUE_STABLE_WEIGHT);
                 } else {
@@ -877,7 +892,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
     public long readWeightTimeout(int timeout) throws JposException, InterruptedException {
         long startTime = System.currentTimeMillis();
-        while (true) {
+        while (!Thread.currentThread().isInterrupted()) {
             ScaleWeight weight = readScaleWeight();
             if (weight == null) {
                 return 0;
@@ -902,13 +917,12 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                 return weight.weight;
             }
 
-            if (System.currentTimeMillis() > (startTime + timeout)) 
-            {
+            if (System.currentTimeMillis() > (startTime + timeout)) {
                 return weight.weight;
-                //throw new JposException(JPOS_E_TIMEOUT, "Истекло время ожидания фиксированного веса");
             }
             Thread.sleep(100);
         }
+        throw new InterruptedException("Thread interrupted while reading weight");
     }
 
     class WeightTarget implements Runnable {
@@ -925,33 +939,47 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     }
 
     public void weightProc() {
+        logger.debug("Weight processing thread started");
         try {
             while (!Thread.interrupted()) {
-                synchronized (requests) {
-                    while (!requests.isEmpty()) {
-                        WeightRequest request = requests.remove(0);
-                        try {
-                            long weight = readWeightTimeout(request.getTimeout());
-                            DataEvent event = new DataEvent(this, (int) weight);
-                            addEvent(event);
-
-                        } catch (JposException e) {
-                            ErrorEvent event = new ErrorEvent(this,
-                                    e.getErrorCode(), e.getErrorCodeExtended(),
-                                    JPOS_EL_INPUT, JPOS_ER_RETRY);
-                            handleErrorEvent(event);
-                        }
-                    }
-                    requests.wait();
+                WeightRequest request = null;
+                try {
+                    // Берем запрос из очереди, блокируясь до появления элемента
+                    request = requests.take();
+                } catch (InterruptedException e) {
+                    logger.debug("Weight thread interrupted while waiting for request");
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                
+                // Обрабатываем запрос
+                try {
+                    logger.debug("Processing weight request with timeout: " + request.getTimeout());
+                    long weight = readWeightTimeout(request.getTimeout());
+                    DataEvent event = new DataEvent(this, (int) weight);
+                    addEvent(event);
+                    logger.debug("Weight request processed, weight: " + weight);
+                } catch (JposException e) {
+                    logger.error("Error processing weight request", e);
+                    ErrorEvent event = new ErrorEvent(this,
+                            e.getErrorCode(), e.getErrorCodeExtended(),
+                            JPOS_EL_INPUT, JPOS_ER_RETRY);
+                    handleErrorEvent(event);
+                } catch (InterruptedException e) {
+                    logger.debug("Weight thread interrupted during processing");
+                    Thread.currentThread().interrupt();
+                    break;
                 }
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            logger.error("Unexpected error in weightProc", e);
+        } finally {
+            logger.debug("Weight processing thread stopped");
         }
     }
 
     private JposException getJposException(Exception e) {
-        logger.error(e);
+        logger.error("Exception caught", e);
         if (e instanceof DeviceError) {
             DeviceError deviceError = (DeviceError) e;
             switch (deviceError.getCode()) {
