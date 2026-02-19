@@ -5,6 +5,8 @@
  */
 package com.bsmart.jpos.scale;
 
+import java.io.File;
+import java.net.URL;
 import jpos.JposConst;
 import jpos.Scale;
 import jpos.JposException;
@@ -29,11 +31,277 @@ public class ScaleServiceTest {
 
     private Scale driver;
 
+package com.bsmart.jpos.scale;
+
+import jpos.JposException;
+import jpos.Scale;
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.After;
+import static org.junit.Assert.*;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.net.URL;
+import javax.xml.parsers.DocumentBuilderFactory;
+import org.w3c.dom.Document;
+import org.w3c.dom.NodeList;
+
+public class ScaleServiceTest {
+    
+    private Scale scale;
+    private static boolean jposInitialized = false;
+    
     @Before
-    public void setUp() {
+    public void setUp() throws Exception {
+        if (!jposInitialized) {
+            initializeJpos();
+        }
+        
+        scale = new Scale();
+    }
+    
+    @After
+    public void tearDown() {
+        if (scale != null) {
+            try {
+                if (scale.getClaimed()) {
+                    scale.release();
+                }
+                scale.close();
+            } catch (Exception e) {
+                // ignore
+            }
+        }
+    }
+    
+    private void initializeJpos() throws Exception {
+        System.out.println("\n=== JavaPOS Initialization ===");
+        
+        // 1. Находим jpos.xml
+        File configFile = findJposConfig();
+        if (configFile == null) {
+            diagnoseJposLocation();
+            throw new RuntimeException("Cannot find jpos.xml");
+        }
+        
+        System.out.println("Using config: " + configFile.getAbsolutePath());
+        System.out.println("Config exists: " + configFile.exists());
+        System.out.println("Config readable: " + configFile.canRead());
+        System.out.println("Config size: " + configFile.length() + " bytes");
+        
+        // 2. Проверяем содержимое XML
+        verifyJposXml(configFile);
+        
+        // 3. Устанавливаем свойства JCL
+        System.setProperty("jpos.config.regPopFile", configFile.getAbsolutePath());
+        System.setProperty("jpos.config.regPopFileType", "xml");
+        System.setProperty("jpos.loader.serviceManagerClass", 
+                          "jpos.loader.simple.SimpleServiceManager");
+        
+        // 4. Проверяем что JCL видит наш сервис
+        checkJclRegistry();
+        
+        jposInitialized = true;
+    }
+    
+    private File findJposConfig() {
+        // Приоритет: сначала ищем в build, потом в test/resources
+        
+        String[] possiblePaths = {
+            "build/test/classes/jpos.xml",
+            "build/classes/test/jpos.xml",
+            "build/test/resources/jpos.xml",
+            "test/resources/jpos.xml",
+            "JposScale/build/test/classes/jpos.xml",
+            "JposScale/test/resources/jpos.xml",
+            "src/test/resources/jpos.xml"
+        };
+        
+        String userDir = System.getProperty("user.dir");
+        System.out.println("User dir: " + userDir);
+        
+        for (String path : possiblePaths) {
+            File file = new File(userDir, path);
+            if (file.exists()) {
+                return file;
+            }
+            
+            // Пробуем без userDir
+            file = new File(path);
+            if (file.exists()) {
+                return file;
+            }
+        }
+        
+        // Пробуем через ClassLoader
+        URL url = getClass().getClassLoader().getResource("jpos.xml");
+        if (url != null) {
+            String path = url.getPath();
+            if (path.startsWith("file:/")) {
+                path = path.substring(6);
+            }
+            if (path.startsWith("/") && System.getProperty("os.name").contains("Windows")) {
+                path = path.substring(1);
+            }
+            return new File(path);
+        }
+        
+        return null;
+    }
+    
+    private void verifyJposXml(File configFile) throws Exception {
+        System.out.println("\n--- Verifying jpos.xml content ---");
+        
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        Document doc = factory.newDocumentBuilder().parse(configFile);
+        
+        NodeList entries = doc.getElementsByTagName("JposEntry");
+        System.out.println("Found " + entries.getLength() + " JposEntry elements");
+        
+        for (int i = 0; i < entries.getLength(); i++) {
+            org.w3c.dom.Element entry = (org.w3c.dom.Element) entries.item(i);
+            String logicalName = entry.getAttribute("logicalName");
+            System.out.println("  Entry " + i + ": logicalName = " + logicalName);
+            
+            // Проверяем factory class
+            NodeList creation = entry.getElementsByTagName("creation");
+            if (creation.getLength() > 0) {
+                org.w3c.dom.Element creationElem = (org.w3c.dom.Element) creation.item(0);
+                String factoryClass = creationElem.getAttribute("factoryClass");
+                String serviceClass = creationElem.getAttribute("serviceClass");
+                System.out.println("    factoryClass: " + factoryClass);
+                System.out.println("    serviceClass: " + serviceClass);
+                
+                // Проверяем доступность классов
+                try {
+                    Class.forName(factoryClass);
+                    System.out.println("    ✓ Factory class found");
+                } catch (ClassNotFoundException e) {
+                    System.err.println("    ✗ Factory class NOT found: " + factoryClass);
+                }
+                
+                try {
+                    Class.forName(serviceClass);
+                    System.out.println("    ✓ Service class found");
+                } catch (ClassNotFoundException e) {
+                    System.err.println("    ✗ Service class NOT found: " + serviceClass);
+                }
+            }
+        }
+    }
+    
+    private void checkJclRegistry() {
+        System.out.println("\n--- Checking JCL Registry ---");
+        
+        try {
+            // Загружаем JCL реестр
+            jpos.loader.simple.SimpleServiceManager ssm = 
+                new jpos.loader.simple.SimpleServiceManager();
+            
+            // Получаем все logical names
+            java.util.Enumeration<?> entries = ssm.getJclRegPop().getEntries();
+            System.out.println("JCL Registry entries:");
+            
+            boolean foundScale = false;
+            while (entries.hasMoreElements()) {
+                Object entry = entries.nextElement();
+                if (entry instanceof jpos.config.JposEntry) {
+                    jpos.config.JposEntry jposEntry = (jpos.config.JposEntry) entry;
+                    String logicalName = (String) jposEntry.getPropertyValue("logicalName");
+                    String factoryClass = (String) jposEntry.getPropertyValue("factoryClass");
+                    String serviceClass = (String) jposEntry.getPropertyValue("serviceClass");
+                    
+                    System.out.println("  logicalName: " + logicalName);
+                    System.out.println("    factoryClass: " + factoryClass);
+                    System.out.println("    serviceClass: " + serviceClass);
+                    
+                    if ("Scale".equals(logicalName) || "TestScale".equals(logicalName)) {
+                        foundScale = true;
+                    }
+                }
+            }
+            
+            if (!foundScale) {
+                System.err.println("  ✗ No Scale service found in registry!");
+            } else {
+                System.out.println("  ✓ Scale service found in registry");
+            }
+            
+        } catch (Exception e) {
+            System.err.println("Error checking JCL registry: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+    
+    private void diagnoseJposLocation() {
+        System.err.println("\n=== DIAGNOSTICS ===");
+        
+        // Проверяем classpath
+        System.err.println("Classpath entries:");
+        String classpath = System.getProperty("java.class.path");
+        String[] entries = classpath.split(File.pathSeparator);
+        for (String entry : entries) {
+            System.err.println("  " + entry);
+            
+            // Проверяем наличие jpos.xml в каждой директории classpath
+            File entryFile = new File(entry);
+            if (entryFile.isDirectory()) {
+                File jposFile = new File(entryFile, "jpos.xml");
+                if (jposFile.exists()) {
+                    System.err.println("    → jpos.xml found here!");
+                }
+            }
+        }
+        
+        // Проверяем системные свойства
+        System.err.println("\nSystem properties:");
+        System.err.println("  user.dir: " + System.getProperty("user.dir"));
+        System.err.println("  java.home: " + System.getProperty("java.home"));
+        
+        // Проверяем папку проекта
+        File projectDir = new File(".");
+        findJposXml(projectDir);
+    }
+    
+    private void findJposXml(File dir) {
+        if (!dir.exists() || !dir.isDirectory()) return;
+        
+        File[] files = dir.listFiles();
+        if (files == null) return;
+        
+        for (File file : files) {
+            if (file.isDirectory()) {
+                if (!file.getName().startsWith(".")) {
+                    findJposXml(file);
+                }
+            } else if (file.getName().equals("jpos.xml")) {
+                System.err.println("Found jpos.xml at: " + file.getAbsolutePath());
+            }
+        }
+    }
+    
+    @Before
+    public void setUp() throws Exception {
+        // Ищем jpos.xml в NetBeans структуре
+        String configPath = findJposConfig();
+        
+        if (configPath == null) {
+            // Если не нашли, выводим диагностику
+            diagnoseJposLocation();
+            throw new RuntimeException("Cannot find jpos.xml configuration file");
+        }
+        
+        System.setProperty("jpos.config.regPopFile", configPath);
+        System.setProperty("jpos.config.regPopFileType", "xml");
+        System.setProperty("jpos.loader.serviceManagerClass", 
+                          "jpos.loader.simple.SimpleServiceManager");
+        
+        System.out.println("JavaPOS config loaded from: " + configPath);
+        
         driver = new Scale();
     }
-
+        
     @After
     public void tearDown() {
         try {

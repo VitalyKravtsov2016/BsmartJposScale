@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE JposEntries PUBLIC "-//JavaPOS//DTD//EN"
+                             "jpos/res/jcl.dtd">
+<JposEntries>
+   <JposEntry logicalName="Scale">
+        <creation factoryClass="com.bsmart.jpos.EquipmentServiceInstanceFactory" serviceClass="com.bsmart.jpos.scale.ScaleService"/>
+        <vendor name="BSMART" url="https://bsmart-tech.ru"/>
+        <jpos category="Scale" version="1.0"/>
+        <product description="Scale service" name="Scale" url="http://www.javapos.com"/>
+		
+        <!--<prop name="portName" type="String" value="COM3"/>-->
+        <!--<prop name="portName" type="String" value="10.11.7.129:51234"/>-->
+		
+        <!-- Port type: 0- serial, 1- TCP -->
+        <prop name="portType" type="String" value="0"/>
+        <prop name="portName" type="String" value="/dev/ttyACM0"/>
+        <prop name="baudRate" type="String" value="9600"/>
+        <prop name="protocol" type="String" value="pos2"/>
+        <prop name="password" type="String" value="30"/>
+        <prop name="timeout" type="String" value="1000"/>
+    </JposEntry> 
+    
+</JposEntries>

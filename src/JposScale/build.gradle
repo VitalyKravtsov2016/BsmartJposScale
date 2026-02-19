@@ -18,12 +18,24 @@ sourceSets {
             includes = [ "res/*.*", "**/resources/*.*" ]
         }
     }
+    // Эта секция уже настроена правильно, но я явно указываю для ясности
+    test {
+        java {
+            srcDirs = [ "test" ] // Папка с тестами
+        }
+        resources {
+            srcDirs = [ "test" ]
+            includes = [ "**/*.properties", "**/*.xml" ]
+        }
+    }
 }
 
 repositories {
     flatDir {
         dirs "${projectDir}/../lib"
     }
+    // Добавляем Maven Central для скачивания недостающих зависимостей
+    mavenCentral()
 }
 
 dependencies {
@@ -33,8 +45,12 @@ dependencies {
     implementation 'log4j-core:log4j-core:2.25.1'
     implementation 'nrjavaserial:nrjavaserial:3.9.3'
 
+    // Зависимости для тестов
     testImplementation 'org.hamcrest:hamcrest-core:1.3'
     testImplementation 'junit:junit:4.12'
+    
+    // Добавляем возможность использовать implementation зависимости в тестах
+    testImplementation configurations.implementation
 }
 
 task utilVersionClass() {
@@ -68,4 +84,32 @@ task dist(type: Zip) {
 
 artifacts {
    archives dist
+}
+
+// Добавляем задачу для запуска только тестов
+task runTests(type: Test) {
+    useJUnit()
+    
+    testLogging {
+        events "passed", "skipped", "failed"
+        exceptionFormat "full"
+        showStandardStreams = true
+    }
+}
+
+// Указываем кодировку для компиляции
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+}
+
+// Настройка для тестов
+test {
+    useJUnit()
+    
+    testLogging {
+        events "passed", "skipped", "failed"
+    }
+    
+    // Показывать вывод тестов в консоли
+    testLogging.showStandardStreams = true
 }
