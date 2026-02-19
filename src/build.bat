@@ -1,4 +1,4 @@
 @echo off
 
-cmd /c gradlew clean build uploadArchives -i
+cmd /c gradlew clean build -i
 pause

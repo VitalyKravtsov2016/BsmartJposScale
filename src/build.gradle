@@ -16,6 +16,5 @@ allprojects {
         delete "${rootDir}/../dist/zip/javase"
         delete "${rootDir}/../bin/"
         delete "${rootDir}/out/"
-        delete "${rootDir}/.gradle/"
     }
 }

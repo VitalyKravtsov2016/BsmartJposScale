@@ -27,30 +27,27 @@ repositories {
 }
 
 dependencies {
+    implementation 'javapos:javapos:1.14.2'
+    implementation 'xerces:xercesImpl:2.12.2'
+    implementation 'log4j-api:log4j-api:2.25.1'
+    implementation 'log4j-core:log4j-core:2.25.1'
+    implementation 'nrjavaserial:nrjavaserial:3.9.3'
 
-    compile 'javapos:javapos:1.14.2',
-            'xerces:xercesImpl:2.12.2',
-			'log4j-api:log4j-api:2.25.1',
-			'log4j-core:log4j-core:2.25.1',
-			'nrjavaserial:nrjavaserial:3.9.3'
-
-	
-    testCompile group: 'org.hamcrest', name: 'hamcrest-core', version: '1.3'
-    testCompile group: 'junit', name: 'junit', version: '4.12'
+    testImplementation 'org.hamcrest:hamcrest-core:1.3'
+    testImplementation 'junit:junit:4.12'
 }
 
-
-task utilVersionClass()  {
+task utilVersionClass() {
     def clazz = new File("${projectDir}/src/com/bsmart/util/ServiceVersion.java")
     clazz.text = "package com.bsmart.util;\n\npublic class ServiceVersion {\n    public static final String VERSION = \""+version+"\";\n}"
 }
 
 jar {
-    archiveName = "smscale.jar"
+    archiveFileName = "smscale.jar"
     manifest {
         attributes(
             "Implementation-Title": "BSmart.JavaPOS",
-            "Class-Path": configurations.compile.collect { it.getName() }.join(' '),
+            "Class-Path": configurations.compileClasspath.collect { it.getName() }.join(' '),
             "Implementation-Version": version
         )
     }
@@ -58,12 +55,12 @@ jar {
 jar.dependsOn('utilVersionClass')
 
 task dist(type: Zip) {
-    destinationDir = new File("${rootDir}/../dist/zip/javase/")
-    baseName = 'bsmart-jpos-scale'
+    destinationDirectory = file("${rootDir}/../dist/zip/javase/")
+    archiveBaseName = 'bsmart-jpos-scale'
     dependsOn jar
     
-    from jar.archivePath
-    from configurations.compile
+    from jar.archiveFile
+    from configurations.compileClasspath
     from "Res/"
     from "${rootDir}/../History.txt"
     from "${rootDir}/../Doc/JposScaleDriver.txt"
@@ -71,8 +68,4 @@ task dist(type: Zip) {
 
 artifacts {
    archives dist
-}
-
-uploadArchives {
-
 }
