@@ -51,7 +51,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     private final int S_OPENED = 1;
     private final int S_CLAIMED = 2;
     private final int S_ENABLED = 3;
-    
+
     private boolean zeroValid = false;
     private int statusNotify = SCAL_SN_DISABLED;
     private int powerNotify = JPOS_PN_ENABLED;
@@ -74,6 +74,16 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     private final List<JposEvent> events = new ArrayList<JposEvent>();
     // Используем BlockingQueue вместо List с ручной синхронизацией
     private final BlockingQueue<WeightRequest> requests = new LinkedBlockingQueue<>();
+    private boolean pollEnabled = true;
+
+// Добавляем setter/getter
+    public void setPollEnabled(boolean pollEnabled) throws JposException {
+        this.pollEnabled = pollEnabled;
+    }
+
+    public boolean getPollEnabled() throws JposException {
+        return pollEnabled;
+    }
 
     public boolean getCapCompareFirmwareVersion() throws JposException {
         logger.debug("getCapCompareFirmwareVersion()");
@@ -180,31 +190,40 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         m_logicalName = logicalName;
         asyncMode = false;
 
-        JposPropertyReader reader = new JposPropertyReader(m_jposEntry);
+        StringParams params = new StringParams();
+        params.set(IDevice.PARAM_PORTNAME, "");
+        params.set(IDevice.PARAM_DATABITS, "8");
+        params.set(IDevice.PARAM_STOPBITS, "1");
+        params.set(IDevice.PARAM_PARITY, "0");
+        params.set(IDevice.PARAM_PASSWORD, "30");
+        params.set(IDevice.PARAM_OPEN_TIMEOUT, "100");
+        params.set(IDevice.PARAM_PORTTYPE, "0");
+
+        String protocol = "pos2";
+
         try {
-            String protocol = reader.readString("protocol").toLowerCase();
+
+            if (m_jposEntry != null) {
+                JposPropertyReader reader = new JposPropertyReader(m_jposEntry);
+                protocol = reader.readString("protocol").toLowerCase();
+
+                String value = reader.readString(RS232Const.RS232_PORT_NAME_PROP_NAME, "");
+                params.set(IDevice.PARAM_PORTNAME, value);
+
+                value = reader.readString(RS232Const.RS232_BAUD_RATE_PROP_NAME, "9600");
+                params.set(IDevice.PARAM_BAUDRATE, value);
+
+                value = reader.readString("password", "30");
+                params.set(IDevice.PARAM_PASSWORD, value);
+
+                value = reader.readString("timeout", "100");
+                params.set(IDevice.PARAM_OPEN_TIMEOUT, value);
+
+                value = reader.readString("portType", "0");
+                params.set(IDevice.PARAM_PORTTYPE, value);
+            }
+
             scale = createProtocol(protocol);
-
-            StringParams params = new StringParams();
-            params.set(IDevice.PARAM_DATABITS, "8");
-            params.set(IDevice.PARAM_STOPBITS, "1");
-            params.set(IDevice.PARAM_PARITY, "0");
-
-            String value = reader.readString(RS232Const.RS232_PORT_NAME_PROP_NAME, "");
-            params.set(IDevice.PARAM_PORTNAME, value);
-
-            value = reader.readString(RS232Const.RS232_BAUD_RATE_PROP_NAME, "9600");
-            params.set(IDevice.PARAM_BAUDRATE, value);
-
-            value = reader.readString("password", "30");
-            params.set(IDevice.PARAM_PASSWORD, value);
-
-            value = reader.readString("timeout", "100");
-            params.set(IDevice.PARAM_OPEN_TIMEOUT, value);
-
-            value = reader.readString("portType", "0");
-            params.set(IDevice.PARAM_PORTTYPE, value);
-
             scale.setParams(params);
             state = S_OPENED;
             logger.debug("open: OK");
@@ -213,7 +232,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         }
     }
 
-    private ScaleSerial createProtocol(String protocol) throws Exception {
+    protected ScaleSerial createProtocol(String protocol) throws Exception {
         if (protocol.equalsIgnoreCase("pos2")) {
             return new Pos2Serial();
         }
@@ -253,7 +272,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
             scale.connect();
             deviceMetrics = scale.getDeviceMetrics();
             logger.debug(deviceMetrics.toString());
-            
+
         } catch (Exception e) {
             throw getJposException(e);
         }
@@ -609,6 +628,27 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         }
     }
 
+    /**
+     * Обработка autoDisable после отправки DataEvent
+     */
+    private void handleAutoDisableAfterDataEvent() {
+        if (autoDisable) {
+            try {
+                logger.debug("AutoDisable: disabling device after DataEvent");
+                // Вызываем в отдельном потоке, чтобы не блокировать eventProc
+                new Thread(() -> {
+                    try {
+                        setDeviceEnabled(false);
+                    } catch (JposException e) {
+                        logger.error("AutoDisable failed", e);
+                    }
+                }).start();
+            } catch (Exception e) {
+                logger.error("AutoDisable failed", e);
+            }
+        }
+    }
+
     public void eventProc() {
         try {
             synchronized (events) {
@@ -619,6 +659,11 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                         if (!(event instanceof DataEvent) || dataEventEnabled) {
                             events.remove(index);
                             fireJposEvent(event);
+                            
+                            // Обработка autoDisable после отправки DataEvent
+                            if (event instanceof DataEvent) {
+                                handleAutoDisableAfterDataEvent();
+                            }
                         } else {
                             index++;
                         }
@@ -637,8 +682,10 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     }
 
     private void fireJposEvent(JposEvent event) {
-        if (eventsCallback == null) return;
-        
+        if (eventsCallback == null) {
+            return;
+        }
+
         logger.debug("fireJposEvent, " + event);
         if (event instanceof StatusUpdateEvent) {
             logger.debug("fireStatusUpdateEvent, " + event);
@@ -716,13 +763,13 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
             case S_CLOSED:
                 result = JPOS_S_CLOSED;
                 break;
-                
+
             case S_OPENED:
             case S_CLAIMED:
             case S_ENABLED:
                 result = JPOS_S_IDLE;
                 break;
-                
+
             default:
                 result = JPOS_S_ERROR;
         }
@@ -739,14 +786,22 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void setDeviceEnabled(boolean enabled) throws JposException {
         logger.debug("setDeviceEnabled(" + enabled + ")");
         checkClaimed();
-        
+
         try {
             if (enabled) {
                 state = S_ENABLED;
                 readScaleWeight();
                 setPowerState(JPOS_PS_ONLINE);
-                pollThread = new Thread(new PollTarget(this));
-                pollThread.start();
+                
+                // Запускаем pollThread только если pollEnabled == true
+                if (pollEnabled) {
+                    pollThread = new Thread(new PollTarget(this));
+                    pollThread.start();
+                    logger.debug("Poll thread started");
+                } else {
+                    logger.debug("Poll thread is disabled by pollEnabled=false");
+                }
+
                 if (!freezeEvents && eventThread == null) {
                     eventThread = new Thread(new EventTarget(this));
                     eventThread.start();
@@ -754,7 +809,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
             } else {
                 state = S_CLAIMED;
                 setPowerState(JPOS_PS_UNKNOWN);
-                
+
                 // Останавливаем pollThread
                 if (pollThread != null) {
                     pollThread.interrupt();
@@ -766,7 +821,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                     }
                     pollThread = null;
                 }
-                
+
                 // Останавливаем eventThread
                 if (eventThread != null) {
                     eventThread.interrupt();
@@ -780,7 +835,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                     }
                     eventThread = null;
                 }
-                
+
                 // Очищаем очереди
                 requests.clear();
             }
@@ -951,7 +1006,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                     Thread.currentThread().interrupt();
                     break;
                 }
-                
+
                 // Обрабатываем запрос
                 try {
                     logger.debug("Processing weight request with timeout: " + request.getTimeout());

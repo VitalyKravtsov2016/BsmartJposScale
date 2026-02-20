@@ -5,36 +5,10 @@
  */
 package com.bsmart.jpos.scale;
 
-import java.io.File;
-import java.net.URL;
+import jpos.JposException;
+import jpos.Scale;
 import jpos.JposConst;
-import jpos.Scale;
-import jpos.JposException;
 import jpos.ScaleConst;
-import jpos.config.JposEntry;
-import static jpos.JposConst.*;
-import static jpos.ScaleConst.SCAL_SN_DISABLED;
-
-import org.junit.Test;
-import org.junit.Before;
-import org.junit.After;
-import static org.junit.Assert.*;
-
-/**
- *
- * @author Виталий
- */
-public class ScaleServiceTest {
-
-    public ScaleServiceTest() {
-    }
-
-    private Scale driver;
-
-package com.bsmart.jpos.scale;
-
-import jpos.JposException;
-import jpos.Scale;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.After;
@@ -46,6 +20,11 @@ import java.net.URL;
 import javax.xml.parsers.DocumentBuilderFactory;
 import org.w3c.dom.Document;
 import org.w3c.dom.NodeList;
+
+/**
+ *
+ * @author Виталий
+ */
 
 public class ScaleServiceTest {
     
@@ -200,7 +179,8 @@ public class ScaleServiceTest {
                 new jpos.loader.simple.SimpleServiceManager();
             
             // Получаем все logical names
-            java.util.Enumeration<?> entries = ssm.getJclRegPop().getEntries();
+          
+            java.util.Enumeration<?> entries = ssm.getRegPopulator().getEntries();
             System.out.println("JCL Registry entries:");
             
             boolean foundScale = false;
@@ -281,46 +261,16 @@ public class ScaleServiceTest {
         }
     }
     
-    @Before
-    public void setUp() throws Exception {
-        // Ищем jpos.xml в NetBeans структуре
-        String configPath = findJposConfig();
-        
-        if (configPath == null) {
-            // Если не нашли, выводим диагностику
-            diagnoseJposLocation();
-            throw new RuntimeException("Cannot find jpos.xml configuration file");
-        }
-        
-        System.setProperty("jpos.config.regPopFile", configPath);
-        System.setProperty("jpos.config.regPopFileType", "xml");
-        System.setProperty("jpos.loader.serviceManagerClass", 
-                          "jpos.loader.simple.SimpleServiceManager");
-        
-        System.out.println("JavaPOS config loaded from: " + configPath);
-        
-        driver = new Scale();
-    }
-        
-    @After
-    public void tearDown() {
-        try {
-            driver.close();
-        } catch (Exception e) {
-        }
-        driver = null;
-    }
-
     public void open() throws Exception {
-        driver.open("Scale");
+        scale.open("Scale");
     }
 
     public void claim() throws Exception {
-        driver.claim(1000);
+        scale.claim(1000);
     }
 
     public void enable() throws Exception {
-        driver.setDeviceEnabled(true);
+        scale.setDeviceEnabled(true);
     }
 
     public void openClaimEnable() throws Exception {
@@ -337,7 +287,7 @@ public class ScaleServiceTest {
         System.out.println("getCapCompareFirmwareVersion");
         open();
         boolean expResult = false;
-        boolean result = driver.getCapCompareFirmwareVersion();
+        boolean result = scale.getCapCompareFirmwareVersion();
         assertEquals(expResult, result);
     }
 
@@ -349,7 +299,7 @@ public class ScaleServiceTest {
         System.out.println("getCapStatusUpdate");
         open();
         boolean expResult = true;
-        boolean result = driver.getCapStatusUpdate();
+        boolean result = scale.getCapStatusUpdate();
         assertEquals(expResult, result);
     }
 
@@ -361,7 +311,7 @@ public class ScaleServiceTest {
         System.out.println("getCapUpdateFirmware");
         open();
         boolean expResult = false;
-        boolean result = driver.getCapUpdateFirmware();
+        boolean result = scale.getCapUpdateFirmware();
         assertEquals(expResult, result);
     }
 
@@ -373,7 +323,7 @@ public class ScaleServiceTest {
         System.out.println("getCapDisplay");
         open();
         boolean expResult = false;
-        boolean result = driver.getCapDisplay();
+        boolean result = scale.getCapDisplay();
         assertEquals(expResult, result);
     }
 
@@ -385,7 +335,7 @@ public class ScaleServiceTest {
         System.out.println("getCapStatisticsReporting");
         open();
         boolean expResult = false;
-        boolean result = driver.getCapStatisticsReporting();
+        boolean result = scale.getCapStatisticsReporting();
         assertEquals(expResult, result);
     }
 
@@ -397,7 +347,7 @@ public class ScaleServiceTest {
         System.out.println("getCapUpdateStatistics");
         open();
         boolean expResult = false;
-        boolean result = driver.getCapUpdateStatistics();
+        boolean result = scale.getCapUpdateStatistics();
         assertEquals(expResult, result);
     }
 
@@ -409,7 +359,7 @@ public class ScaleServiceTest {
         System.out.println("getCapDisplayText");
         open();
         boolean expResult = false;
-        boolean result = driver.getCapDisplayText();
+        boolean result = scale.getCapDisplayText();
         assertEquals(expResult, result);
 
     }
@@ -421,8 +371,8 @@ public class ScaleServiceTest {
     public void testGetCapPowerReporting() throws Exception {
         System.out.println("getCapPowerReporting");
         open();
-        int expResult = JPOS_PR_STANDARD;
-        int result = driver.getCapPowerReporting();
+        int expResult = JposConst.JPOS_PR_STANDARD;
+        int result = scale.getCapPowerReporting();
         assertEquals(expResult, result);
     }
 
@@ -434,7 +384,7 @@ public class ScaleServiceTest {
         System.out.println("getCapPriceCalculating");
         open();
         boolean expResult = false;
-        boolean result = driver.getCapPriceCalculating();
+        boolean result = scale.getCapPriceCalculating();
         assertEquals(expResult, result);
     }
 
@@ -446,7 +396,7 @@ public class ScaleServiceTest {
         System.out.println("getCapTareWeight");
         open();
         boolean expResult = true;
-        boolean result = driver.getCapTareWeight();
+        boolean result = scale.getCapTareWeight();
         assertEquals(expResult, result);
 
     }
@@ -459,7 +409,7 @@ public class ScaleServiceTest {
         System.out.println("getCapZeroScale");
         open();
         boolean expResult = true;
-        boolean result = driver.getCapZeroScale();
+        boolean result = scale.getCapZeroScale();
         assertEquals(expResult, result);
 
     }
@@ -471,8 +421,8 @@ public class ScaleServiceTest {
     public void testRelease() throws Exception {
         System.out.println("release");
         open();
-        driver.claim(0);
-        driver.release();
+        scale.claim(0);
+        scale.release();
     }
 
     /**
@@ -483,7 +433,7 @@ public class ScaleServiceTest {
         System.out.println("claim");
         int timeout = 0;
         open();
-        driver.claim(timeout);
+        scale.claim(timeout);
 
     }
 
@@ -494,7 +444,7 @@ public class ScaleServiceTest {
     public void testClose() throws Exception {
         System.out.println("close");
         open();
-        driver.close();
+        scale.close();
 
     }
 
@@ -507,7 +457,7 @@ public class ScaleServiceTest {
         String arg0 = "";
         int[] arg1 = null;
         open();
-        driver.compareFirmwareVersion(arg0, arg1);
+        scale.compareFirmwareVersion(arg0, arg1);
 
     }
 
@@ -519,7 +469,7 @@ public class ScaleServiceTest {
         System.out.println("getScaleLiveWeight");
         open();
         int expResult = 0;
-        int result = driver.getScaleLiveWeight();
+        int result = scale.getScaleLiveWeight();
         assertEquals(expResult, result);
 
     }
@@ -531,8 +481,8 @@ public class ScaleServiceTest {
     public void testGetStatusNotify() throws Exception {
         System.out.println("getStatusNotify");
         open();
-        int expResult = SCAL_SN_DISABLED;
-        int result = driver.getStatusNotify();
+        int expResult = ScaleConst.SCAL_SN_DISABLED;
+        int result = scale.getStatusNotify();
         assertEquals(expResult, result);
 
     }
@@ -545,7 +495,7 @@ public class ScaleServiceTest {
         System.out.println("setStatusNotify");
         int statusNotify = 0;
         open();
-        driver.setStatusNotify(statusNotify);
+        scale.setStatusNotify(statusNotify);
 
     }
 
@@ -557,7 +507,7 @@ public class ScaleServiceTest {
         System.out.println("updateFirmware");
         String arg0 = "";
         open();
-        driver.updateFirmware(arg0);
+        scale.updateFirmware(arg0);
 
     }
 
@@ -569,7 +519,7 @@ public class ScaleServiceTest {
         System.out.println("resetStatistics");
         String arg0 = "";
         open();
-        driver.resetStatistics(arg0);
+        scale.resetStatistics(arg0);
 
     }
 
@@ -581,7 +531,7 @@ public class ScaleServiceTest {
         System.out.println("retrieveStatistics");
         String[] arg0 = null;
         open();
-        driver.retrieveStatistics(arg0);
+        scale.retrieveStatistics(arg0);
 
     }
 
@@ -593,7 +543,7 @@ public class ScaleServiceTest {
         System.out.println("updateStatistics");
         String arg0 = "";
         open();
-        driver.updateStatistics(arg0);
+        scale.updateStatistics(arg0);
 
     }
 
@@ -604,7 +554,7 @@ public class ScaleServiceTest {
     public void testClearInput() throws Exception {
         System.out.println("clearInput");
         open();
-        driver.clearInput();
+        scale.clearInput();
 
     }
 
@@ -616,7 +566,7 @@ public class ScaleServiceTest {
         System.out.println("displayText");
         String arg0 = "";
         open();
-        driver.displayText(arg0);
+        scale.displayText(arg0);
 
     }
 
@@ -628,7 +578,7 @@ public class ScaleServiceTest {
         System.out.println("setAsyncMode");
         boolean async = false;
         open();
-        driver.setAsyncMode(async);
+        scale.setAsyncMode(async);
 
     }
 
@@ -640,7 +590,7 @@ public class ScaleServiceTest {
         System.out.println("getAsyncMode");
         open();
         boolean expResult = false;
-        boolean result = driver.getAsyncMode();
+        boolean result = scale.getAsyncMode();
         assertEquals(expResult, result);
 
     }
@@ -653,7 +603,7 @@ public class ScaleServiceTest {
         System.out.println("getDataCount");
         open();
         int expResult = 0;
-        int result = driver.getDataCount();
+        int result = scale.getDataCount();
         assertEquals(expResult, result);
 
     }
@@ -666,7 +616,7 @@ public class ScaleServiceTest {
         System.out.println("getMaxDisplayTextChars");
         open();
         int expResult = 0;
-        int result = driver.getMaxDisplayTextChars();
+        int result = scale.getMaxDisplayTextChars();
         assertEquals(expResult, result);
 
     }
@@ -679,7 +629,7 @@ public class ScaleServiceTest {
         System.out.println("getPowerNotify");
         open();
         int expResult = 0;
-        int result = driver.getPowerNotify();
+        int result = scale.getPowerNotify();
         assertEquals(expResult, result);
 
     }
@@ -691,8 +641,8 @@ public class ScaleServiceTest {
     public void testGetPowerState() throws Exception {
         System.out.println("getPowerState");
         open();
-        int expResult = JPOS_PS_UNKNOWN;
-        int result = driver.getPowerState();
+        int expResult = JposConst.JPOS_PS_UNKNOWN;
+        int result = scale.getPowerState();
         assertEquals(expResult, result);
     }
 
@@ -704,7 +654,7 @@ public class ScaleServiceTest {
         System.out.println("getSalesPrice");
         open();
         long expResult = 0L;
-        long result = driver.getSalesPrice();
+        long result = scale.getSalesPrice();
         assertEquals(expResult, result);
 
     }
@@ -717,7 +667,7 @@ public class ScaleServiceTest {
         System.out.println("getTareWeight");
         open();
         int expResult = 0;
-        int result = driver.getTareWeight();
+        int result = scale.getTareWeight();
         assertEquals(expResult, result);
 
     }
@@ -730,7 +680,7 @@ public class ScaleServiceTest {
         System.out.println("getUnitPrice");
         open();
         long expResult = 0L;
-        long result = driver.getUnitPrice();
+        long result = scale.getUnitPrice();
         assertEquals(expResult, result);
 
     }
@@ -743,7 +693,7 @@ public class ScaleServiceTest {
         System.out.println("getAutoDisable");
         open();
         boolean expResult = false;
-        boolean result = driver.getAutoDisable();
+        boolean result = scale.getAutoDisable();
         assertEquals(expResult, result);
 
     }
@@ -756,7 +706,7 @@ public class ScaleServiceTest {
         System.out.println("setAutoDisable");
         boolean autoDisable = false;
         open();
-        driver.setAutoDisable(autoDisable);
+        scale.setAutoDisable(autoDisable);
 
     }
 
@@ -768,7 +718,7 @@ public class ScaleServiceTest {
         System.out.println("setDataEventEnabled");
         boolean enabled = false;
         open();
-        driver.setDataEventEnabled(enabled);
+        scale.setDataEventEnabled(enabled);
 
     }
 
@@ -780,7 +730,7 @@ public class ScaleServiceTest {
         System.out.println("getDataEventEnabled");
         open();
         boolean expResult = false;
-        boolean result = driver.getDataEventEnabled();
+        boolean result = scale.getDataEventEnabled();
         assertEquals(expResult, result);
 
     }
@@ -793,7 +743,7 @@ public class ScaleServiceTest {
         System.out.println("setPowerNotify");
         int powerNotify = 0;
         open();
-        driver.setPowerNotify(powerNotify);
+        scale.setPowerNotify(powerNotify);
 
     }
 
@@ -805,7 +755,7 @@ public class ScaleServiceTest {
         System.out.println("setTareWeight");
         int tareWeight = 0;
         openClaimEnable();
-        driver.setTareWeight(tareWeight);
+        scale.setTareWeight(tareWeight);
     }
 
     /**
@@ -817,10 +767,10 @@ public class ScaleServiceTest {
         long arg0 = 0L;
         open();
         try {
-            driver.setUnitPrice(arg0);
+            scale.setUnitPrice(arg0);
             fail("Exception expected");
         } catch (JposException e) {
-            assertEquals(JPOS_E_ILLEGAL, e.getErrorCode());
+            assertEquals(JposConst.JPOS_E_ILLEGAL, e.getErrorCode());
             assertEquals("Не поддерживается", e.getMessage());
         }
     }
@@ -832,7 +782,7 @@ public class ScaleServiceTest {
     public void testZeroScale() throws Exception {
         System.out.println("zeroScale");
         openClaimEnable();
-        driver.zeroScale();
+        scale.zeroScale();
 
     }
 
@@ -844,7 +794,7 @@ public class ScaleServiceTest {
         System.out.println("getMaximumWeight");
         open();
         int expResult = 0x7FFFFFFF;
-        int result = driver.getMaximumWeight();
+        int result = scale.getMaximumWeight();
         assertEquals(expResult, result);
     }
 
@@ -856,7 +806,7 @@ public class ScaleServiceTest {
         System.out.println("getWeightUnit");
         open();
         int expResult = ScaleConst.SCAL_WU_GRAM;
-        int result = driver.getWeightUnit();
+        int result = scale.getWeightUnit();
         assertEquals(expResult, result);
     }
 
@@ -869,7 +819,7 @@ public class ScaleServiceTest {
         int[] data = null;
         int timeout = 0;
         open();
-        driver.readWeight(data, timeout);
+        scale.readWeight(data, timeout);
     }
 
     /**
@@ -880,7 +830,7 @@ public class ScaleServiceTest {
         System.out.println("checkHealth");
         int arg0 = 0;
         open();
-        driver.checkHealth(arg0);
+        scale.checkHealth(arg0);
 
     }
 
@@ -895,10 +845,10 @@ public class ScaleServiceTest {
         Object arg2 = null;
         open();
         try {
-            driver.directIO(arg0, arg1, arg2);
+            scale.directIO(arg0, arg1, arg2);
             fail("No exception");
         } catch (JposException e) {
-            assertEquals(JPOS_E_ILLEGAL, e.getErrorCode());
+            assertEquals(JposConst.JPOS_E_ILLEGAL, e.getErrorCode());
             assertEquals("Неизвестная команда", e.getMessage());
         }
     }
@@ -911,7 +861,7 @@ public class ScaleServiceTest {
         System.out.println("getCheckHealthText");
         open();
         String expResult = "";
-        String result = driver.getCheckHealthText();
+        String result = scale.getCheckHealthText();
         assertEquals(expResult, result);
 
     }
@@ -924,7 +874,7 @@ public class ScaleServiceTest {
         System.out.println("getClaimed");
         open();
         boolean expResult = false;
-        boolean result = driver.getClaimed();
+        boolean result = scale.getClaimed();
         assertEquals(expResult, result);
 
     }
@@ -937,7 +887,7 @@ public class ScaleServiceTest {
         System.out.println("getDeviceServiceDescription");
         open();
         String expResult = "ScalePos2Service";
-        String result = driver.getDeviceServiceDescription();
+        String result = scale.getDeviceServiceDescription();
         assertEquals(expResult, result);
     }
 
@@ -949,7 +899,7 @@ public class ScaleServiceTest {
         System.out.println("getDeviceServiceVersion");
         open();
         int expResult = 1013003;
-        int result = driver.getDeviceServiceVersion();
+        int result = scale.getDeviceServiceVersion();
         assertEquals(expResult, result);
 
     }
@@ -962,7 +912,7 @@ public class ScaleServiceTest {
         System.out.println("getFreezeEvents");
         open();
         boolean expResult = false;
-        boolean result = driver.getFreezeEvents();
+        boolean result = scale.getFreezeEvents();
         assertEquals(expResult, result);
 
     }
@@ -975,7 +925,7 @@ public class ScaleServiceTest {
         System.out.println("setFreezeEvents");
         boolean freezeEvents = false;
         open();
-        driver.setFreezeEvents(freezeEvents);
+        scale.setFreezeEvents(freezeEvents);
 
     }
 
@@ -987,7 +937,7 @@ public class ScaleServiceTest {
         System.out.println("getPhysicalDeviceDescription");
         open();
         String expResult = "Весы ШТРИХ-М POS2";
-        String result = driver.getPhysicalDeviceDescription();
+        String result = scale.getPhysicalDeviceDescription();
         assertEquals(expResult, result);
 
     }
@@ -1000,7 +950,7 @@ public class ScaleServiceTest {
         System.out.println("getPhysicalDeviceName");
         open();
         String expResult = "Весы ШТРИХ-М POS2";
-        String result = driver.getPhysicalDeviceName();
+        String result = scale.getPhysicalDeviceName();
         assertEquals(expResult, result);
 
     }
@@ -1013,7 +963,7 @@ public class ScaleServiceTest {
         System.out.println("getState");
         open();
         int expResult = JposConst.JPOS_S_IDLE;
-        int result = driver.getState();
+        int result = scale.getState();
         assertEquals(expResult, result);
     }
 
@@ -1025,7 +975,7 @@ public class ScaleServiceTest {
         System.out.println("getDeviceEnabled");
         open();
         boolean expResult = false;
-        boolean result = driver.getDeviceEnabled();
+        boolean result = scale.getDeviceEnabled();
         assertEquals(expResult, result);
 
     }
@@ -1038,8 +988,8 @@ public class ScaleServiceTest {
         System.out.println("setDeviceEnabled");
         boolean enabled = false;
         open();
-        driver.claim(0);
-        driver.setDeviceEnabled(enabled);
+        scale.claim(0);
+        scale.setDeviceEnabled(enabled);
 
     }
 
@@ -1051,7 +1001,7 @@ public class ScaleServiceTest {
         System.out.println("getZeroValid");
         open();
         boolean expResult = false;
-        boolean result = driver.getZeroValid();
+        boolean result = scale.getZeroValid();
         assertEquals(expResult, result);
 
     }
@@ -1064,7 +1014,7 @@ public class ScaleServiceTest {
         System.out.println("setZeroValid");
         boolean zeroValid = false;
         open();
-        driver.setZeroValid(zeroValid);
+        scale.setZeroValid(zeroValid);
 
     }
 
