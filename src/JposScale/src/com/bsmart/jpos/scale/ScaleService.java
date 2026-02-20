@@ -54,7 +54,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
     private boolean zeroValid = false;
     private int statusNotify = SCAL_SN_DISABLED;
-    private int powerNotify = JPOS_PN_ENABLED;
+    private int powerNotify = JPOS_PN_DISABLED;
     private int powerState = JPOS_PS_UNKNOWN;
     private ScaleSerial scale = null;
     private DeviceMetrics deviceMetrics;
@@ -401,8 +401,8 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public int getPowerNotify() throws JposException {
         logger.debug("getPowerNotify()");
         checkOpened();
-        logger.debug("getPowerNotify = JPOS_PN_DISABLED");
-        return JPOS_PN_DISABLED;
+        logger.debug("getPowerNotify = " + powerNotify);
+        return powerNotify;
     }
 
     public int getPowerState() throws JposException {
@@ -913,6 +913,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
             if (weight == null) {
                 return null;
             }
+            setPowerState(JPOS_PS_ONLINE);
 
             if (weight.status.isStable()) {
                 scaleLiveWeight = weight.weight;
