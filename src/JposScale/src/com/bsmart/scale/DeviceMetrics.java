@@ -2,20 +2,16 @@ package com.bsmart.scale;
 
 public class DeviceMetrics {
 
-    private final int type, subType;
-    private final int majorVersion, minorVersion;
-    private final int model, lang;
-    private final String description;
+    private int type;
+    private int subType;
+    private int majorVersion;
+    private int minorVersion;
+    private int model;
+    private int lang;
+    private String description;
 
-    public DeviceMetrics(int type, int subType, int majorVersion,
-            int minorVersion, int model, int lang, String description) {
-        this.type = type;
-        this.subType = subType;
-        this.majorVersion = majorVersion;
-        this.minorVersion = minorVersion;
-        this.model = model;
-        this.lang = lang;
-        this.description = description;
+    // Только пустой конструктор
+    public DeviceMetrics() {
     }
 
     public String toString() {
@@ -26,52 +22,60 @@ public class DeviceMetrics {
         return s;
     }
 
-    /**
-     * @return the type
-     */
+    // Геттеры и сеттеры для всех полей
     public int getType() {
         return type;
     }
 
-    /**
-     * @return the subType
-     */
+    public void setType(int type) {
+        this.type = type;
+    }
+
     public int getSubType() {
         return subType;
     }
 
-    /**
-     * @return the majorVersion
-     */
+    public void setSubType(int subType) {
+        this.subType = subType;
+    }
+
     public int getMajorVersion() {
         return majorVersion;
     }
 
-    /**
-     * @return the minorVersion
-     */
+    public void setMajorVersion(int majorVersion) {
+        this.majorVersion = majorVersion;
+    }
+
     public int getMinorVersion() {
         return minorVersion;
     }
 
-    /**
-     * @return the model
-     */
+    public void setMinorVersion(int minorVersion) {
+        this.minorVersion = minorVersion;
+    }
+
     public int getModel() {
         return model;
     }
 
-    /**
-     * @return the lang
-     */
+    public void setModel(int model) {
+        this.model = model;
+    }
+
     public int getLang() {
         return lang;
     }
 
-    /**
-     * @return the description
-     */
+    public void setLang(int lang) {
+        this.lang = lang;
+    }
+
     public String getDescription() {
         return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
     }
 }

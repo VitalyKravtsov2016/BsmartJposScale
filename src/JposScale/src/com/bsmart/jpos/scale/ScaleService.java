@@ -282,12 +282,27 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
     public void close() throws JposException {
         logger.debug("close()");
+
+        if (getDeviceEnabled()) {
+            setDeviceEnabled(false);
+        }
+        // Выключаем устройство, только если оно захвачено и включено
         if (state >= S_CLAIMED) {
             release();
         }
+
+        // Сбрасываем состояние
         asyncMode = false;
         state = S_CLOSED;
         scale = null;
+        m_weight = null;
+
+        // Очищаем очереди
+        requests.clear();
+        synchronized (events) {
+            events.clear();
+        }
+
         logger.debug("close: OK");
     }
 
@@ -659,7 +674,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                         if (!(event instanceof DataEvent) || dataEventEnabled) {
                             events.remove(index);
                             fireJposEvent(event);
-                            
+
                             // Обработка autoDisable после отправки DataEvent
                             if (event instanceof DataEvent) {
                                 handleAutoDisableAfterDataEvent();
@@ -792,7 +807,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                 state = S_ENABLED;
                 readScaleWeight();
                 setPowerState(JPOS_PS_ONLINE);
-                
+
                 // Запускаем pollThread только если pollEnabled == true
                 if (pollEnabled) {
                     pollThread = new Thread(new PollTarget(this));
@@ -810,6 +825,12 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                 state = S_CLAIMED;
                 setPowerState(JPOS_PS_UNKNOWN);
 
+                // Останавливаем асинхронный режим
+                if (asyncMode) {
+                    logger.debug("Stopping async mode");
+                    setAsyncMode(false);
+                }
+
                 // Останавливаем pollThread
                 if (pollThread != null) {
                     pollThread.interrupt();
@@ -820,6 +841,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                         Thread.currentThread().interrupt();
                     }
                     pollThread = null;
+                    logger.debug("Poll thread stopped");
                 }
 
                 // Останавливаем eventThread
@@ -834,10 +856,12 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                         logger.error("Error stopping eventThread", e);
                     }
                     eventThread = null;
+                    logger.debug("Event thread stopped");
                 }
 
                 // Очищаем очереди
                 requests.clear();
+                logger.debug("Requests queue cleared");
             }
         } catch (Exception e) {
             throw getJposException(e);
@@ -910,16 +934,34 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     private ScaleWeight readScaleWeight() throws JposException {
         try {
             ScaleWeight weight = scale.getWeight();
+
+            // Защита от NPE
             if (weight == null) {
+                logger.warn("readScaleWeight: weight is null");
                 return null;
             }
-            setPowerState(JPOS_PS_ONLINE);
+
+            if (weight.status == null) {
+                logger.warn("readScaleWeight: weight.status is null");
+                return null;
+            }
+
+            // Добавляем защиту для m_weight
+            ScaleWeight previousWeight = m_weight;
+
+            if (powerNotify == JPOS_PN_ENABLED) {
+                setPowerState(JPOS_PS_ONLINE);
+            }
 
             if (weight.status.isStable()) {
                 scaleLiveWeight = weight.weight;
             }
 
-            if ((m_weight == null) || (weight.status.isStable() != m_weight.status.isStable())) {
+            // Проверяем на null при сравнении
+            boolean isStableChanged = (previousWeight == null)
+                    || (weight.status.isStable() != previousWeight.status.isStable());
+
+            if (isStableChanged) {
                 if (weight.status.isStable()) {
                     statusUpdateEvent(SCAL_SUE_STABLE_WEIGHT);
                 } else {
@@ -927,21 +969,32 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                 }
             }
 
-            if ((weight.weight == 0) && ((m_weight == null) || (m_weight.weight != 0))) {
+            boolean isZeroChanged = (weight.weight == 0)
+                    && ((previousWeight == null) || (previousWeight.weight != 0));
+
+            if (isZeroChanged) {
                 statusUpdateEvent(SCAL_SUE_WEIGHT_ZERO);
             }
 
-            if ((weight.weight < 0) && ((m_weight == null) || (m_weight.weight >= 0))) {
+            boolean isUnderZeroChanged = (weight.weight < 0)
+                    && ((previousWeight == null) || (previousWeight.weight >= 0));
+
+            if (isUnderZeroChanged) {
                 statusUpdateEvent(SCAL_SUE_WEIGHT_UNDER_ZERO);
             }
 
-            if (weight.status.isOverweight() && ((m_weight == null) || (!m_weight.status.isOverweight()))) {
+            boolean isOverweightChanged = weight.status.isOverweight()
+                    && ((previousWeight == null) || (!previousWeight.status.isOverweight()));
+
+            if (isOverweightChanged) {
                 statusUpdateEvent(SCAL_SUE_WEIGHT_OVERWEIGHT);
             }
+
             m_weight = weight;
             return weight;
 
         } catch (Exception e) {
+            logger.error("Exception in readScaleWeight", e);
             throw getJposException(e);
         }
     }

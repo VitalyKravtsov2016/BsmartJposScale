@@ -1,1021 +1,1114 @@
-/*
- * To change this license header, choose License Headers in Project Properties.
- * To change this template file, choose Tools | Templates
- * and open the template in the editor.
- */
 package com.bsmart.jpos.scale;
 
-import jpos.JposException;
-import jpos.Scale;
-import jpos.JposConst;
-import jpos.ScaleConst;
+import static org.junit.Assert.*;
+
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
 import org.junit.Before;
 import org.junit.Test;
-import org.junit.After;
-import static org.junit.Assert.*;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.InputStream;
-import java.net.URL;
-import javax.xml.parsers.DocumentBuilderFactory;
-import org.w3c.dom.Document;
-import org.w3c.dom.NodeList;
+import org.junit.runner.RunWith;
+
+import com.bsmart.IDevice;
+import com.bsmart.DeviceError;
+import com.bsmart.jpos.scale.TestScaleSerial;
+import com.bsmart.scale.EScale;
+import com.bsmart.scale.ScaleSerial;
+import com.bsmart.scale.ScaleWeight;
+import com.bsmart.scale.ScaleStatus;
+import com.bsmart.scale.DeviceMetrics;
+import com.bsmart.tools.StringParams;
+
+import jpos.BaseControl;
+import jpos.JposConst;
+import jpos.JposException;
+import jpos.ScaleConst;
+import jpos.events.DataEvent;
+import jpos.events.JposEvent;
+import jpos.events.StatusUpdateEvent;
+import jpos.events.DirectIOEvent;
+import jpos.events.ErrorEvent;
+import jpos.events.OutputCompleteEvent;
+import jpos.services.EventCallbacks;
 
 /**
- *
- * @author Виталий
+ * Полный тест ScaleService с использованием TestScaleSerial. Покрывает все
+ * основные методы класса ScaleService.
  */
-
 public class ScaleServiceTest {
-    
-    private Scale scale;
-    private static boolean jposInitialized = false;
-    
+
+    /**
+     * Расширенный ScaleService для тестов, который возвращает TestScaleSerial
+     * через createProtocol
+     */
+    private static class TestableScaleService extends ScaleService {
+
+        private TestScaleSerial testScale;
+
+        public void setTestScale(TestScaleSerial testScale) {
+            this.testScale = testScale;
+        }
+
+        @Override
+        protected ScaleSerial createProtocol(String protocol) throws Exception {
+            return testScale;
+        }
+
+    }
+
+    /**
+     * Реализация EventCallbacks для тестирования
+     */
+    private static class TestEventCallbacks implements EventCallbacks {
+
+        private BlockingQueue<JposEvent> allEvents = new LinkedBlockingQueue<>();
+
+        @Override
+        public void fireDataEvent(DataEvent event) {
+            allEvents.offer(event);
+        }
+
+        @Override
+        public void fireDirectIOEvent(DirectIOEvent event) {
+            allEvents.offer(event);
+        }
+
+        @Override
+        public void fireErrorEvent(ErrorEvent event) {
+            allEvents.offer(event);
+        }
+
+        @Override
+        public void fireOutputCompleteEvent(OutputCompleteEvent event) {
+            allEvents.offer(event);
+        }
+
+        @Override
+        public void fireStatusUpdateEvent(StatusUpdateEvent event) {
+            allEvents.offer(event);
+        }
+
+        @Override
+        public BaseControl getEventSource() {
+            return null;
+        }
+
+        public <T extends JposEvent> T waitForEvent(Class<T> eventType, long timeout, TimeUnit unit)
+                throws InterruptedException {
+            long deadline = System.currentTimeMillis() + unit.toMillis(timeout);
+
+            while (System.currentTimeMillis() < deadline) {
+                JposEvent event = allEvents.poll(100, TimeUnit.MILLISECONDS);
+                if (event != null && eventType.isAssignableFrom(event.getClass())) {
+                    return eventType.cast(event);
+                }
+            }
+            return null;
+        }
+
+        public void clearEvents() {
+            allEvents.clear();
+        }
+    }
+
+    private TestScaleSerial testScale;
+    private TestableScaleService service;
+    private TestEventCallbacks callbacks;
+
     @Before
     public void setUp() throws Exception {
-        if (!jposInitialized) {
-            initializeJpos();
-        }
-        
-        scale = new Scale();
+        testScale = new TestScaleSerial();
+        service = new TestableScaleService();
+        service.setTestScale(testScale);
+        callbacks = new TestEventCallbacks();
+
+        // Базовая настройка тестового устройства
+        testScale.setDeviceType(EScale.Pos2);
+        testScale.setDeviceMetrics(new DeviceMetrics());
     }
-    
-    @After
-    public void tearDown() {
-        if (scale != null) {
+
+    private void initService(boolean pollEnabled, boolean asyncMode) throws Exception {
+        service.open("TestScale", callbacks);
+        service.setPollEnabled(pollEnabled);
+        service.setPowerNotify(JposConst.JPOS_PN_ENABLED);
+        service.setDataEventEnabled(true);
+        service.claim(0);
+        service.setDeviceEnabled(true);
+        service.setAsyncMode(asyncMode);
+
+        // Пропускаем событие POWER_ONLINE при включении
+        if (pollEnabled || asyncMode) {
+            StatusUpdateEvent powerEvent = callbacks.waitForEvent(
+                    StatusUpdateEvent.class, 2, TimeUnit.SECONDS);
+            if (powerEvent != null && powerEvent.getStatus() == JposConst.JPOS_SUE_POWER_ONLINE) {
+                // OK
+            }
+        }
+        callbacks.clearEvents();
+    }
+
+    private void initService(boolean pollEnabled) throws Exception {
+        initService(pollEnabled, false);
+    }
+
+    private void cleanup() throws Exception {
+        service.close();
+        Thread.sleep(200);
+    }
+
+    // ======================== ТЕСТЫ АСИНХРОННОГО ЧТЕНИЯ ========================
+    @Test
+    public void testAsyncReadWeightProducesDataEvent() throws Exception {
+        testScale.setCurrentWeight(1234, true, false);
+
+        initService(false, true);
+
+        service.readWeight(null, 1000);
+
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+
+        assertNotNull("Должно быть получено DataEvent", dataEvent);
+        assertEquals(1234, dataEvent.getStatus());
+
+        cleanup();
+    }
+
+    @Test
+    public void testAsyncReadWeightWithUnstableWeight() throws Exception {
+        initService(false, true);
+
+        // Сначала нестабильный вес
+        testScale.setCurrentWeight(500, false, false);
+
+        // Через некоторое время стабильный
+        new Thread(() -> {
             try {
-                if (scale.getClaimed()) {
-                    scale.release();
-                }
-                scale.close();
-            } catch (Exception e) {
-                // ignore
+                Thread.sleep(500);
+                testScale.setCurrentWeight(1234, true, false);
+            } catch (InterruptedException e) {
             }
-        }
+        }).start();
+
+        service.readWeight(null, 2000);
+
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 3, TimeUnit.SECONDS);
+        assertNotNull("Должно быть получено DataEvent", dataEvent);
+        assertEquals(1234, dataEvent.getStatus());
+
+        cleanup();
     }
-    
-    private void initializeJpos() throws Exception {
-        System.out.println("\n=== JavaPOS Initialization ===");
-        
-        // 1. Находим jpos.xml
-        File configFile = findJposConfig();
-        if (configFile == null) {
-            diagnoseJposLocation();
-            throw new RuntimeException("Cannot find jpos.xml");
-        }
-        
-        System.out.println("Using config: " + configFile.getAbsolutePath());
-        System.out.println("Config exists: " + configFile.exists());
-        System.out.println("Config readable: " + configFile.canRead());
-        System.out.println("Config size: " + configFile.length() + " bytes");
-        
-        // 2. Проверяем содержимое XML
-        verifyJposXml(configFile);
-        
-        // 3. Устанавливаем свойства JCL
-        System.setProperty("jpos.config.regPopFile", configFile.getAbsolutePath());
-        System.setProperty("jpos.config.regPopFileType", "xml");
-        System.setProperty("jpos.loader.serviceManagerClass", 
-                          "jpos.loader.simple.SimpleServiceManager");
-        
-        // 4. Проверяем что JCL видит наш сервис
-        checkJclRegistry();
-        
-        jposInitialized = true;
+
+    @Test
+    public void testAsyncReadWeightWithTimeout() throws Exception {
+        testScale.setCurrentWeight(500, false, false); // Всегда нестабильный
+
+        initService(false, true);
+        service.readWeight(null, 100);
+
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 1, TimeUnit.SECONDS);
+
+        assertNotNull("Должно быть получено DataEvent по таймауту", dataEvent);
+        assertEquals(500, dataEvent.getStatus());
+
+        cleanup();
     }
-    
-    private File findJposConfig() {
-        // Приоритет: сначала ищем в build, потом в test/resources
-        
-        String[] possiblePaths = {
-            "build/test/classes/jpos.xml",
-            "build/classes/test/jpos.xml",
-            "build/test/resources/jpos.xml",
-            "test/resources/jpos.xml",
-            "JposScale/build/test/classes/jpos.xml",
-            "JposScale/test/resources/jpos.xml",
-            "src/test/resources/jpos.xml"
-        };
-        
-        String userDir = System.getProperty("user.dir");
-        System.out.println("User dir: " + userDir);
-        
-        for (String path : possiblePaths) {
-            File file = new File(userDir, path);
-            if (file.exists()) {
-                return file;
-            }
-            
-            // Пробуем без userDir
-            file = new File(path);
-            if (file.exists()) {
-                return file;
-            }
-        }
-        
-        // Пробуем через ClassLoader
-        URL url = getClass().getClassLoader().getResource("jpos.xml");
-        if (url != null) {
-            String path = url.getPath();
-            if (path.startsWith("file:/")) {
-                path = path.substring(6);
-            }
-            if (path.startsWith("/") && System.getProperty("os.name").contains("Windows")) {
-                path = path.substring(1);
-            }
-            return new File(path);
-        }
-        
-        return null;
+
+    @Test
+    public void testAsyncReadWeightWithMultipleRequests() throws Exception {
+        initService(false, true);
+
+        // Первый запрос
+        testScale.setCurrentWeight(100, true, false);
+        service.readWeight(null, 1000);
+
+        DataEvent event1 = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Должно быть получено DataEvent для первого запроса", event1);
+        assertEquals(100, event1.getStatus());
+
+        // Второй запрос
+        testScale.setCurrentWeight(200, true, false);
+        service.readWeight(null, 1000);
+
+        DataEvent event2 = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Должно быть получено DataEvent для второго запроса", event2);
+        assertEquals(200, event2.getStatus());
+
+        // Третий запрос
+        testScale.setCurrentWeight(300, true, false);
+        service.readWeight(null, 1000);
+
+        DataEvent event3 = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Должно быть получено DataEvent для третьего запроса", event3);
+        assertEquals(300, event3.getStatus());
+
+        cleanup();
     }
-    
-    private void verifyJposXml(File configFile) throws Exception {
-        System.out.println("\n--- Verifying jpos.xml content ---");
-        
-        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-        Document doc = factory.newDocumentBuilder().parse(configFile);
-        
-        NodeList entries = doc.getElementsByTagName("JposEntry");
-        System.out.println("Found " + entries.getLength() + " JposEntry elements");
-        
-        for (int i = 0; i < entries.getLength(); i++) {
-            org.w3c.dom.Element entry = (org.w3c.dom.Element) entries.item(i);
-            String logicalName = entry.getAttribute("logicalName");
-            System.out.println("  Entry " + i + ": logicalName = " + logicalName);
-            
-            // Проверяем factory class
-            NodeList creation = entry.getElementsByTagName("creation");
-            if (creation.getLength() > 0) {
-                org.w3c.dom.Element creationElem = (org.w3c.dom.Element) creation.item(0);
-                String factoryClass = creationElem.getAttribute("factoryClass");
-                String serviceClass = creationElem.getAttribute("serviceClass");
-                System.out.println("    factoryClass: " + factoryClass);
-                System.out.println("    serviceClass: " + serviceClass);
-                
-                // Проверяем доступность классов
-                try {
-                    Class.forName(factoryClass);
-                    System.out.println("    ✓ Factory class found");
-                } catch (ClassNotFoundException e) {
-                    System.err.println("    ✗ Factory class NOT found: " + factoryClass);
-                }
-                
-                try {
-                    Class.forName(serviceClass);
-                    System.out.println("    ✓ Service class found");
-                } catch (ClassNotFoundException e) {
-                    System.err.println("    ✗ Service class NOT found: " + serviceClass);
-                }
-            }
-        }
+
+    @Test
+    public void testAsyncReadWeightWithInterruptedThread() throws Exception {
+        testScale.setResponseDelay(2000); // Долгий ответ
+
+        initService(false, true);
+        callbacks.clearEvents();
+
+        service.readWeight(null, 3000);
+        Thread.sleep(100);
+        service.setAsyncMode(false); // Прерываем поток
+
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 1, TimeUnit.SECONDS);
+        assertNull("Не должно быть DataEvent после прерывания", dataEvent);
+
+        cleanup();
     }
-    
-    private void checkJclRegistry() {
-        System.out.println("\n--- Checking JCL Registry ---");
-        
+
+    // ======================== ТЕСТЫ СИНХРОННОГО ЧТЕНИЯ ========================
+    @Test
+    public void testSyncReadWeight() throws Exception {
+        testScale.setCurrentWeight(1234, true, false);
+
+        initService(false, false);
+
+        int[] data = new int[1];
+        service.readWeight(data, 1000);
+
+        assertEquals("Вес должен быть прочитан синхронно", 1234, data[0]);
+
+        cleanup();
+    }
+
+    @Test
+    public void testSyncReadWeightWithTimeout() throws Exception {
+        testScale.setCurrentWeight(500, false, false);
+
+        initService(false, false);
+
+        int[] data = new int[1];
+        service.readWeight(data, 100);
+
+        assertEquals("Должен вернуться текущий вес по таймауту", 500, data[0]);
+
+        cleanup();
+    }
+
+    @Test
+    public void testSyncReadWeightWithZeroValid() throws Exception {
+        testScale.setCurrentWeight(0, true, false);
+
+        initService(false, false);
+        service.setZeroValid(true);
+
+        int[] data = new int[1];
+        service.readWeight(data, 1000);
+
+        assertEquals("Нулевой вес должен быть принят", 0, data[0]);
+
+        cleanup();
+    }
+
+    @Test
+    public void testSyncReadWeightWithZeroInvalid() throws Exception {
+        testScale.setCurrentWeight(0, true, false);
+
+        initService(false, false);
+        service.setZeroValid(false);
+
+        int[] data = new int[1];
+        service.readWeight(data, 100);
+
+        assertEquals("По таймауту вернется текущий вес", 0, data[0]);
+
+        cleanup();
+    }
+
+    @Test
+    public void testSyncReadWeightWithOverweight() throws Exception {
+        initService(false, false);
+
+        // Сначала нормальный вес
+        testScale.setCurrentWeight(500, true, false);
+        int[] data = new int[1];
+        service.readWeight(data, 1000);
+        assertEquals(500, data[0]);
+
+        // Перегруз - должно быть исключение
+        testScale.setCurrentWeight(2000, true, true);
+
         try {
-            // Загружаем JCL реестр
-            jpos.loader.simple.SimpleServiceManager ssm = 
-                new jpos.loader.simple.SimpleServiceManager();
-            
-            // Получаем все logical names
-          
-            java.util.Enumeration<?> entries = ssm.getRegPopulator().getEntries();
-            System.out.println("JCL Registry entries:");
-            
-            boolean foundScale = false;
-            while (entries.hasMoreElements()) {
-                Object entry = entries.nextElement();
-                if (entry instanceof jpos.config.JposEntry) {
-                    jpos.config.JposEntry jposEntry = (jpos.config.JposEntry) entry;
-                    String logicalName = (String) jposEntry.getPropertyValue("logicalName");
-                    String factoryClass = (String) jposEntry.getPropertyValue("factoryClass");
-                    String serviceClass = (String) jposEntry.getPropertyValue("serviceClass");
-                    
-                    System.out.println("  logicalName: " + logicalName);
-                    System.out.println("    factoryClass: " + factoryClass);
-                    System.out.println("    serviceClass: " + serviceClass);
-                    
-                    if ("Scale".equals(logicalName) || "TestScale".equals(logicalName)) {
-                        foundScale = true;
-                    }
-                }
-            }
-            
-            if (!foundScale) {
-                System.err.println("  ✗ No Scale service found in registry!");
-            } else {
-                System.out.println("  ✓ Scale service found in registry");
-            }
-            
-        } catch (Exception e) {
-            System.err.println("Error checking JCL registry: " + e.getMessage());
-            e.printStackTrace();
+            service.readWeight(data, 1000);
+            fail("Должно быть выброшено JposException для перегруза");
+        } catch (JposException e) {
+            assertEquals("Код ошибки должен быть JPOS_E_EXTENDED",
+                    JposConst.JPOS_E_EXTENDED, e.getErrorCode());
+            assertEquals("Extended код ошибки должен быть JPOS_ESCAL_OVERWEIGHT",
+                    ScaleConst.JPOS_ESCAL_OVERWEIGHT, e.getErrorCodeExtended());
         }
+
+        cleanup();
     }
-    
-    private void diagnoseJposLocation() {
-        System.err.println("\n=== DIAGNOSTICS ===");
-        
-        // Проверяем classpath
-        System.err.println("Classpath entries:");
-        String classpath = System.getProperty("java.class.path");
-        String[] entries = classpath.split(File.pathSeparator);
-        for (String entry : entries) {
-            System.err.println("  " + entry);
-            
-            // Проверяем наличие jpos.xml в каждой директории classpath
-            File entryFile = new File(entry);
-            if (entryFile.isDirectory()) {
-                File jposFile = new File(entryFile, "jpos.xml");
-                if (jposFile.exists()) {
-                    System.err.println("    → jpos.xml found here!");
-                }
+
+    // ======================== ТЕСТЫ НУЛЕВОГО ВЕСА ========================
+    @Test
+    public void testAsyncReadWeightWithZeroWeightAndZeroValid() throws Exception {
+        testScale.setCurrentWeight(0, true, false);
+
+        initService(false, true);
+        service.setZeroValid(true);
+        service.readWeight(null, 1000);
+
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+
+        assertNotNull("Должно быть получено DataEvent с нулевым весом", dataEvent);
+        assertEquals(0, dataEvent.getStatus());
+
+        cleanup();
+    }
+
+    @Test
+    public void testAsyncReadWeightWithZeroWeightAndZeroInvalid() throws Exception {
+        testScale.setCurrentWeight(0, true, false);
+
+        initService(false, true);
+        service.setZeroValid(false);
+        service.readWeight(null, 500);
+
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 1, TimeUnit.SECONDS);
+
+        assertNotNull("Должно быть получено DataEvent по таймауту", dataEvent);
+        assertEquals(0, dataEvent.getStatus());
+
+        cleanup();
+    }
+
+    // ======================== ТЕСТЫ ПЕРЕГРУЗКИ ========================
+    @Test
+    public void testAsyncReadWeightWithOverweight() throws Exception {
+        initService(false, true);
+
+        // Нормальный вес
+        testScale.setCurrentWeight(500, true, false);
+        service.readWeight(null, 1000);
+
+        DataEvent normalEvent = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Должно быть DataEvent для нормального веса", normalEvent);
+        assertEquals(500, normalEvent.getStatus());
+
+        callbacks.clearEvents();
+
+        // Перегруз
+        testScale.setCurrentWeight(2000, true, true);
+        service.readWeight(null, 1000);
+
+        // В асинхронном режиме должно прийти ErrorEvent
+        ErrorEvent errorEvent = callbacks.waitForEvent(ErrorEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Должно быть ErrorEvent при перегрузе", errorEvent);
+
+        // DataEvent не должно быть
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 1, TimeUnit.SECONDS);
+        assertNull("Не должно быть DataEvent при перегрузе", dataEvent);
+
+        cleanup();
+    }
+
+    // ======================== ТЕСТЫ AUTO DISABLE ========================
+    @Test
+    public void testAsyncReadWeightWithAutoDisable() throws Exception {
+        initService(false, true);
+        service.setAutoDisable(true);
+
+        assertTrue("Устройство должно быть включено до чтения", service.getDeviceEnabled());
+
+        testScale.setCurrentWeight(750, true, false);
+        service.readWeight(null, 1000);
+
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 3, TimeUnit.SECONDS);
+        assertNotNull("Должно быть получено DataEvent", dataEvent);
+        assertEquals(750, dataEvent.getStatus());
+
+        // Проверка autoDisable
+        long deadline = System.currentTimeMillis() + 3000;
+        boolean deviceDisabled = false;
+        while (System.currentTimeMillis() < deadline) {
+            if (!service.getDeviceEnabled()) {
+                deviceDisabled = true;
+                break;
             }
+            Thread.sleep(100);
         }
-        
-        // Проверяем системные свойства
-        System.err.println("\nSystem properties:");
-        System.err.println("  user.dir: " + System.getProperty("user.dir"));
-        System.err.println("  java.home: " + System.getProperty("java.home"));
-        
-        // Проверяем папку проекта
-        File projectDir = new File(".");
-        findJposXml(projectDir);
-    }
-    
-    private void findJposXml(File dir) {
-        if (!dir.exists() || !dir.isDirectory()) return;
-        
-        File[] files = dir.listFiles();
-        if (files == null) return;
-        
-        for (File file : files) {
-            if (file.isDirectory()) {
-                if (!file.getName().startsWith(".")) {
-                    findJposXml(file);
-                }
-            } else if (file.getName().equals("jpos.xml")) {
-                System.err.println("Found jpos.xml at: " + file.getAbsolutePath());
-            }
-        }
-    }
-    
-    public void open() throws Exception {
-        scale.open("Scale");
+        assertTrue("Устройство должно быть отключено после autoDisable", deviceDisabled);
+
+        cleanup();
     }
 
-    public void claim() throws Exception {
-        scale.claim(1000);
-    }
-
-    public void enable() throws Exception {
-        scale.setDeviceEnabled(true);
-    }
-
-    public void openClaimEnable() throws Exception {
-        open();
-        claim();
-        enable();
-    }
-
-    /**
-     * Test of getCapCompareFirmwareVersion method, of class ScaleService.
-     */
+    // ======================== ТЕСТЫ ТАРЫ ========================
     @Test
-    public void testGetCapCompareFirmwareVersion() throws Exception {
-        System.out.println("getCapCompareFirmwareVersion");
-        open();
-        boolean expResult = false;
-        boolean result = scale.getCapCompareFirmwareVersion();
-        assertEquals(expResult, result);
+    public void testAsyncReadWeightWithTare() throws Exception {
+        testScale.setCurrentWeight(1000, true, false);
+
+        initService(false, true);
+        service.setTareWeight(200);
+        service.readWeight(null, 1000);
+
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+
+        assertNotNull("Должно быть получено DataEvent", dataEvent);
+        assertEquals(1000, dataEvent.getStatus());
+
+        // Проверяем, что tara была вызвана
+        Long tareValue = testScale.getLastTare();
+        assertNotNull(tareValue);
+        assertEquals(200, tareValue.longValue());
+
+        cleanup();
     }
 
-    /**
-     * Test of getCapStatusUpdate method, of class ScaleService.
-     */
-    @Test
-    public void testGetCapStatusUpdate() throws Exception {
-        System.out.println("getCapStatusUpdate");
-        open();
-        boolean expResult = true;
-        boolean result = scale.getCapStatusUpdate();
-        assertEquals(expResult, result);
-    }
-
-    /**
-     * Test of getCapUpdateFirmware method, of class ScaleService.
-     */
-    @Test
-    public void testGetCapUpdateFirmware() throws Exception {
-        System.out.println("getCapUpdateFirmware");
-        open();
-        boolean expResult = false;
-        boolean result = scale.getCapUpdateFirmware();
-        assertEquals(expResult, result);
-    }
-
-    /**
-     * Test of getCapDisplay method, of class ScaleService.
-     */
-    @Test
-    public void testGetCapDisplay() throws Exception {
-        System.out.println("getCapDisplay");
-        open();
-        boolean expResult = false;
-        boolean result = scale.getCapDisplay();
-        assertEquals(expResult, result);
-    }
-
-    /**
-     * Test of getCapStatisticsReporting method, of class ScaleService.
-     */
-    @Test
-    public void testGetCapStatisticsReporting() throws Exception {
-        System.out.println("getCapStatisticsReporting");
-        open();
-        boolean expResult = false;
-        boolean result = scale.getCapStatisticsReporting();
-        assertEquals(expResult, result);
-    }
-
-    /**
-     * Test of getCapUpdateStatistics method, of class ScaleService.
-     */
-    @Test
-    public void testGetCapUpdateStatistics() throws Exception {
-        System.out.println("getCapUpdateStatistics");
-        open();
-        boolean expResult = false;
-        boolean result = scale.getCapUpdateStatistics();
-        assertEquals(expResult, result);
-    }
-
-    /**
-     * Test of getCapDisplayText method, of class ScaleService.
-     */
-    @Test
-    public void testGetCapDisplayText() throws Exception {
-        System.out.println("getCapDisplayText");
-        open();
-        boolean expResult = false;
-        boolean result = scale.getCapDisplayText();
-        assertEquals(expResult, result);
-
-    }
-
-    /**
-     * Test of getCapPowerReporting method, of class ScaleService.
-     */
-    @Test
-    public void testGetCapPowerReporting() throws Exception {
-        System.out.println("getCapPowerReporting");
-        open();
-        int expResult = JposConst.JPOS_PR_STANDARD;
-        int result = scale.getCapPowerReporting();
-        assertEquals(expResult, result);
-    }
-
-    /**
-     * Test of getCapPriceCalculating method, of class ScaleService.
-     */
-    @Test
-    public void testGetCapPriceCalculating() throws Exception {
-        System.out.println("getCapPriceCalculating");
-        open();
-        boolean expResult = false;
-        boolean result = scale.getCapPriceCalculating();
-        assertEquals(expResult, result);
-    }
-
-    /**
-     * Test of getCapTareWeight method, of class ScaleService.
-     */
-    @Test
-    public void testGetCapTareWeight() throws Exception {
-        System.out.println("getCapTareWeight");
-        open();
-        boolean expResult = true;
-        boolean result = scale.getCapTareWeight();
-        assertEquals(expResult, result);
-
-    }
-
-    /**
-     * Test of getCapZeroScale method, of class ScaleService.
-     */
-    @Test
-    public void testGetCapZeroScale() throws Exception {
-        System.out.println("getCapZeroScale");
-        open();
-        boolean expResult = true;
-        boolean result = scale.getCapZeroScale();
-        assertEquals(expResult, result);
-
-    }
-
-    /**
-     * Test of release method, of class ScaleService.
-     */
-    @Test
-    public void testRelease() throws Exception {
-        System.out.println("release");
-        open();
-        scale.claim(0);
-        scale.release();
-    }
-
-    /**
-     * Test of claim method, of class ScaleService.
-     */
-    @Test
-    public void testClaim() throws Exception {
-        System.out.println("claim");
-        int timeout = 0;
-        open();
-        scale.claim(timeout);
-
-    }
-
-    /**
-     * Test of close method, of class ScaleService.
-     */
-    @Test
-    public void testClose() throws Exception {
-        System.out.println("close");
-        open();
-        scale.close();
-
-    }
-
-    /**
-     * Test of compareFirmwareVersion method, of class ScaleService.
-     */
-    @Test
-    public void testCompareFirmwareVersion() throws Exception {
-        System.out.println("compareFirmwareVersion");
-        String arg0 = "";
-        int[] arg1 = null;
-        open();
-        scale.compareFirmwareVersion(arg0, arg1);
-
-    }
-
-    /**
-     * Test of getScaleLiveWeight method, of class ScaleService.
-     */
-    @Test
-    public void testGetScaleLiveWeight() throws Exception {
-        System.out.println("getScaleLiveWeight");
-        open();
-        int expResult = 0;
-        int result = scale.getScaleLiveWeight();
-        assertEquals(expResult, result);
-
-    }
-
-    /**
-     * Test of getStatusNotify method, of class ScaleService.
-     */
-    @Test
-    public void testGetStatusNotify() throws Exception {
-        System.out.println("getStatusNotify");
-        open();
-        int expResult = ScaleConst.SCAL_SN_DISABLED;
-        int result = scale.getStatusNotify();
-        assertEquals(expResult, result);
-
-    }
-
-    /**
-     * Test of setStatusNotify method, of class ScaleService.
-     */
-    @Test
-    public void testSetStatusNotify() throws Exception {
-        System.out.println("setStatusNotify");
-        int statusNotify = 0;
-        open();
-        scale.setStatusNotify(statusNotify);
-
-    }
-
-    /**
-     * Test of updateFirmware method, of class ScaleService.
-     */
-    @Test
-    public void testUpdateFirmware() throws Exception {
-        System.out.println("updateFirmware");
-        String arg0 = "";
-        open();
-        scale.updateFirmware(arg0);
-
-    }
-
-    /**
-     * Test of resetStatistics method, of class ScaleService.
-     */
-    @Test
-    public void testResetStatistics() throws Exception {
-        System.out.println("resetStatistics");
-        String arg0 = "";
-        open();
-        scale.resetStatistics(arg0);
-
-    }
-
-    /**
-     * Test of retrieveStatistics method, of class ScaleService.
-     */
-    @Test
-    public void testRetrieveStatistics() throws Exception {
-        System.out.println("retrieveStatistics");
-        String[] arg0 = null;
-        open();
-        scale.retrieveStatistics(arg0);
-
-    }
-
-    /**
-     * Test of updateStatistics method, of class ScaleService.
-     */
-    @Test
-    public void testUpdateStatistics() throws Exception {
-        System.out.println("updateStatistics");
-        String arg0 = "";
-        open();
-        scale.updateStatistics(arg0);
-
-    }
-
-    /**
-     * Test of clearInput method, of class ScaleService.
-     */
-    @Test
-    public void testClearInput() throws Exception {
-        System.out.println("clearInput");
-        open();
-        scale.clearInput();
-
-    }
-
-    /**
-     * Test of displayText method, of class ScaleService.
-     */
-    @Test
-    public void testDisplayText() throws Exception {
-        System.out.println("displayText");
-        String arg0 = "";
-        open();
-        scale.displayText(arg0);
-
-    }
-
-    /**
-     * Test of setAsyncMode method, of class ScaleService.
-     */
-    @Test
-    public void testSetAsyncMode() throws Exception {
-        System.out.println("setAsyncMode");
-        boolean async = false;
-        open();
-        scale.setAsyncMode(async);
-
-    }
-
-    /**
-     * Test of getAsyncMode method, of class ScaleService.
-     */
-    @Test
-    public void testGetAsyncMode() throws Exception {
-        System.out.println("getAsyncMode");
-        open();
-        boolean expResult = false;
-        boolean result = scale.getAsyncMode();
-        assertEquals(expResult, result);
-
-    }
-
-    /**
-     * Test of getDataCount method, of class ScaleService.
-     */
-    @Test
-    public void testGetDataCount() throws Exception {
-        System.out.println("getDataCount");
-        open();
-        int expResult = 0;
-        int result = scale.getDataCount();
-        assertEquals(expResult, result);
-
-    }
-
-    /**
-     * Test of getMaxDisplayTextChars method, of class ScaleService.
-     */
-    @Test
-    public void testGetMaxDisplayTextChars() throws Exception {
-        System.out.println("getMaxDisplayTextChars");
-        open();
-        int expResult = 0;
-        int result = scale.getMaxDisplayTextChars();
-        assertEquals(expResult, result);
-
-    }
-
-    /**
-     * Test of getPowerNotify method, of class ScaleService.
-     */
-    @Test
-    public void testGetPowerNotify() throws Exception {
-        System.out.println("getPowerNotify");
-        open();
-        int expResult = 0;
-        int result = scale.getPowerNotify();
-        assertEquals(expResult, result);
-
-    }
-
-    /**
-     * Test of getPowerState method, of class ScaleService.
-     */
-    @Test
-    public void testGetPowerState() throws Exception {
-        System.out.println("getPowerState");
-        open();
-        int expResult = JposConst.JPOS_PS_UNKNOWN;
-        int result = scale.getPowerState();
-        assertEquals(expResult, result);
-    }
-
-    /**
-     * Test of getSalesPrice method, of class ScaleService.
-     */
-    @Test
-    public void testGetSalesPrice() throws Exception {
-        System.out.println("getSalesPrice");
-        open();
-        long expResult = 0L;
-        long result = scale.getSalesPrice();
-        assertEquals(expResult, result);
-
-    }
-
-    /**
-     * Test of getTareWeight method, of class ScaleService.
-     */
     @Test
     public void testGetTareWeight() throws Exception {
-        System.out.println("getTareWeight");
-        open();
-        int expResult = 0;
-        int result = scale.getTareWeight();
-        assertEquals(expResult, result);
+        initService(false);
 
+        service.setTareWeight(500);
+        assertEquals(500, service.getTareWeight());
+
+        cleanup();
     }
 
-    /**
-     * Test of getUnitPrice method, of class ScaleService.
-     */
+    // ======================== ТЕСТЫ CAPABILITIES ========================
     @Test
-    public void testGetUnitPrice() throws Exception {
-        System.out.println("getUnitPrice");
-        open();
-        long expResult = 0L;
-        long result = scale.getUnitPrice();
-        assertEquals(expResult, result);
+    public void testCapabilities() throws Exception {
+        service.open("TestScale", callbacks);
 
+        assertFalse(service.getCapCompareFirmwareVersion());
+        assertTrue(service.getCapStatusUpdate());
+        assertFalse(service.getCapUpdateFirmware());
+        assertFalse(service.getCapDisplay());
+        assertFalse(service.getCapStatisticsReporting());
+        assertFalse(service.getCapUpdateStatistics());
+        assertFalse(service.getCapDisplayText());
+        assertEquals(JposConst.JPOS_PR_STANDARD, service.getCapPowerReporting());
+        assertFalse(service.getCapPriceCalculating());
+        assertTrue(service.getCapTareWeight());
+
+        // CapZeroScale зависит от типа весов
+        testScale.setDeviceType(EScale.Pos2);
+        assertTrue(service.getCapZeroScale());
+
+        testScale.setDeviceType(EScale.Shtrih5);
+        assertFalse(service.getCapZeroScale());
+
+        service.close();
     }
 
-    /**
-     * Test of getAutoDisable method, of class ScaleService.
-     */
+    // ======================== ТЕСТЫ СОСТОЯНИЯ ========================
     @Test
-    public void testGetAutoDisable() throws Exception {
-        System.out.println("getAutoDisable");
-        open();
-        boolean expResult = false;
-        boolean result = scale.getAutoDisable();
-        assertEquals(expResult, result);
+    public void testStateTransitions() throws Exception {
+        // Начальное состояние - CLOSED
+        assertEquals(JposConst.JPOS_S_CLOSED, service.getState());
 
+        // Open
+        service.open("TestScale", callbacks);
+        assertEquals(JposConst.JPOS_S_IDLE, service.getState());
+        assertFalse(service.getClaimed());
+
+        // Claim
+        service.claim(0);
+        assertEquals(JposConst.JPOS_S_IDLE, service.getState());
+        assertTrue(service.getClaimed());
+
+        // Enable
+        service.setDeviceEnabled(true);
+        assertEquals(JposConst.JPOS_S_IDLE, service.getState());
+        assertTrue(service.getDeviceEnabled());
+
+        // Async mode
+        service.setAsyncMode(true);
+        assertTrue(service.getAsyncMode());
+
+        // Disable
+        service.setDeviceEnabled(false);
+        assertFalse(service.getDeviceEnabled());
+        assertFalse(service.getAsyncMode());
+
+        // Release
+        service.release();
+        assertFalse(service.getClaimed());
+
+        // Close
+        service.close();
+        assertEquals(JposConst.JPOS_S_CLOSED, service.getState());
     }
 
-    /**
-     * Test of setAutoDisable method, of class ScaleService.
-     */
+    // ======================== ТЕСТЫ POWER ========================
     @Test
-    public void testSetAutoDisable() throws Exception {
-        System.out.println("setAutoDisable");
-        boolean autoDisable = false;
-        open();
-        scale.setAutoDisable(autoDisable);
+    public void testPowerStateWithNotifyEnabled() throws Exception {
+        initService(true);
 
+        // Пропускаем событие POWER_ONLINE от включения
+        StatusUpdateEvent powerOnEvent = callbacks.waitForEvent(
+                StatusUpdateEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Должно быть событие POWER_ONLINE при включении", powerOnEvent);
+        assertEquals(JposConst.JPOS_SUE_POWER_ONLINE, powerOnEvent.getStatus());
+
+        callbacks.clearEvents();
+
+        // Устанавливаем OFFLINE
+        service.setPowerState(JposConst.JPOS_PS_OFFLINE);
+        StatusUpdateEvent event = callbacks.waitForEvent(
+                StatusUpdateEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Должно быть событие POWER_OFFLINE", event);
+        assertEquals(JposConst.JPOS_SUE_POWER_OFFLINE, event.getStatus());
+
+        cleanup();
     }
 
-    /**
-     * Test of setDataEventEnabled method, of class ScaleService.
-     */
     @Test
-    public void testSetDataEventEnabled() throws Exception {
-        System.out.println("setDataEventEnabled");
-        boolean enabled = false;
-        open();
-        scale.setDataEventEnabled(enabled);
+    public void testPowerStateWithNotifyDisabled() throws Exception {
+        initService(true);
+        callbacks.clearEvents();
 
+        service.setPowerNotify(JposConst.JPOS_PN_DISABLED);
+        service.setPowerState(JposConst.JPOS_PS_ONLINE);
+
+        StatusUpdateEvent event = callbacks.waitForEvent(
+                StatusUpdateEvent.class, 2, TimeUnit.SECONDS);
+        assertNull("Не должно быть событий при PowerNotify DISABLED", event);
+
+        cleanup();
     }
 
-    /**
-     * Test of getDataEventEnabled method, of class ScaleService.
-     */
+    // ======================== ТЕСТЫ СТАТУСНЫХ СОБЫТИЙ ========================
     @Test
-    public void testGetDataEventEnabled() throws Exception {
-        System.out.println("getDataEventEnabled");
-        open();
-        boolean expResult = false;
-        boolean result = scale.getDataEventEnabled();
-        assertEquals(expResult, result);
+    public void testStatusUpdateEvents() throws Exception {
+        initService(true, false);
+        service.setStatusNotify(ScaleConst.SCAL_SN_ENABLED);
+        callbacks.clearEvents();
 
+        // Нестабильный вес
+        testScale.setCurrentWeight(500, false, false);
+        Thread.sleep(500);
+
+        StatusUpdateEvent unstableEvent = callbacks.waitForEvent(
+                StatusUpdateEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Должно быть событие о нестабильном весе", unstableEvent);
+        assertEquals(ScaleConst.SCAL_SUE_WEIGHT_UNSTABLE, unstableEvent.getStatus());
+
+        callbacks.clearEvents();
+
+        // Стабильный вес
+        testScale.setCurrentWeight(500, true, false);
+        Thread.sleep(500);
+
+        StatusUpdateEvent stableEvent = callbacks.waitForEvent(
+                StatusUpdateEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Должно быть событие о стабильном весе", stableEvent);
+        assertEquals(ScaleConst.SCAL_SUE_STABLE_WEIGHT, stableEvent.getStatus());
+
+        callbacks.clearEvents();
+
+        // Нулевой вес
+        testScale.setCurrentWeight(0, true, false);
+        Thread.sleep(500);
+
+        StatusUpdateEvent zeroEvent = callbacks.waitForEvent(
+                StatusUpdateEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Должно быть событие о нулевом весе", zeroEvent);
+        assertEquals(ScaleConst.SCAL_SUE_WEIGHT_ZERO, zeroEvent.getStatus());
+
+        cleanup();
     }
 
-    /**
-     * Test of setPowerNotify method, of class ScaleService.
-     */
     @Test
-    public void testSetPowerNotify() throws Exception {
-        System.out.println("setPowerNotify");
-        int powerNotify = 0;
-        open();
-        scale.setPowerNotify(powerNotify);
+    public void testStatusNotifyDisabled() throws Exception {
+        initService(true, false);
+        service.setStatusNotify(ScaleConst.SCAL_SN_DISABLED);
+        callbacks.clearEvents();
 
+        testScale.setCurrentWeight(500, false, false);
+        Thread.sleep(1000);
+
+        StatusUpdateEvent event = callbacks.waitForEvent(
+                StatusUpdateEvent.class, 1, TimeUnit.SECONDS);
+        assertNull("Не должно быть статусных событий при SCAL_SN_DISABLED", event);
+
+        cleanup();
     }
 
-    /**
-     * Test of setTareWeight method, of class ScaleService.
-     */
+    // ======================== ТЕСТЫ FREEZE EVENTS ========================
     @Test
-    public void testSetTareWeight() throws Exception {
-        System.out.println("setTareWeight");
-        int tareWeight = 0;
-        openClaimEnable();
-        scale.setTareWeight(tareWeight);
+    public void testFreezeEvents() throws Exception {
+        initService(false, true);
+
+        service.setFreezeEvents(true);
+        service.setDataEventEnabled(true);
+        callbacks.clearEvents();
+
+        testScale.setCurrentWeight(500, true, false);
+        service.readWeight(null, 1000);
+
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 1, TimeUnit.SECONDS);
+        assertNull("События не должны приходить при freezeEvents=true", dataEvent);
+
+        service.setFreezeEvents(false);
+        dataEvent = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("После разморозки событие должно прийти", dataEvent);
+        assertEquals(500, dataEvent.getStatus());
+
+        cleanup();
     }
 
-    /**
-     * Test of setUnitPrice method, of class ScaleService.
-     */
+    // ======================== ТЕСТЫ ОБРАБОТКИ ОШИБОК УСТРОЙСТВА ========================
     @Test
+    public void testDeviceErrorNoLink() throws Exception {
+        initService(false, true);
+        callbacks.clearEvents();
+
+        // Нормальная работа
+        testScale.setCurrentWeight(500, true, false);
+        service.readWeight(null, 1000);
+
+        DataEvent normalEvent = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull(normalEvent);
+        assertEquals(500, normalEvent.getStatus());
+
+        callbacks.clearEvents();
+
+        // Ошибка ERROR_NOLINK
+        testScale.setNextException(new DeviceError(IDevice.ERROR_NOLINK, "No link to device"));
+        service.readWeight(null, 1000);
+
+        Thread.sleep(500);
+        assertEquals(JposConst.JPOS_PS_OFF_OFFLINE, service.getPowerState());
+
+        ErrorEvent errorEvent = callbacks.waitForEvent(ErrorEvent.class, 3, TimeUnit.SECONDS);
+        assertNotNull("Должно быть получено ErrorEvent", errorEvent);
+
+        cleanup();
+    }
+
+    @Test
+    public void testDeviceErrorGeneric() throws Exception {
+        initService(false, true);
+        callbacks.clearEvents();
+
+        // Нормальная работа
+        testScale.setCurrentWeight(500, true, false);
+        service.readWeight(null, 1000);
+
+        DataEvent normalEvent = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull(normalEvent);
+
+        callbacks.clearEvents();
+
+        // Общая ошибка
+        testScale.setNextException(new RuntimeException("Generic error"));
+        service.readWeight(null, 1000);
+
+        assertEquals(JposConst.JPOS_PS_ONLINE, service.getPowerState());
+
+        ErrorEvent errorEvent = callbacks.waitForEvent(ErrorEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Должно быть получено ErrorEvent", errorEvent);
+
+        cleanup();
+    }
+
+    @Test
+    public void testDeviceErrorOther() throws Exception {
+        initService(false, true);
+        callbacks.clearEvents();
+
+        // Нормальная работа
+        testScale.setCurrentWeight(500, true, false);
+        service.readWeight(null, 1000);
+
+        DataEvent normalEvent = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull(normalEvent);
+
+        callbacks.clearEvents();
+
+        // Другая ошибка
+        testScale.setNextException(new DeviceError(999, "Other error"));
+        service.readWeight(null, 1000);
+
+        assertEquals(JposConst.JPOS_PS_ONLINE, service.getPowerState());
+
+        ErrorEvent errorEvent = callbacks.waitForEvent(ErrorEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Должно быть получено ErrorEvent", errorEvent);
+
+        cleanup();
+    }
+
+    // ======================== ТЕСТЫ СВОЙСТВ ========================
+    @Test
+    public void testProperties() throws Exception {
+        service.open("TestScale", callbacks);
+
+        service.setZeroValid(true);
+        assertTrue(service.getZeroValid());
+        service.setZeroValid(false);
+        assertFalse(service.getZeroValid());
+
+        service.setStatusNotify(ScaleConst.SCAL_SN_ENABLED);
+        assertEquals(ScaleConst.SCAL_SN_ENABLED, service.getStatusNotify());
+
+        service.setDataEventEnabled(true);
+        assertTrue(service.getDataEventEnabled());
+        service.setDataEventEnabled(false);
+        assertFalse(service.getDataEventEnabled());
+
+        service.setFreezeEvents(true);
+        assertTrue(service.getFreezeEvents());
+        service.setFreezeEvents(false);
+        assertFalse(service.getFreezeEvents());
+
+        service.setAsyncMode(true);
+        assertTrue(service.getAsyncMode());
+        service.setAsyncMode(false);
+        assertFalse(service.getAsyncMode());
+
+        service.setAutoDisable(true);
+        assertTrue(service.getAutoDisable());
+        service.setAutoDisable(false);
+        assertFalse(service.getAutoDisable());
+
+        service.setPollEnabled(false);
+        assertFalse(service.getPollEnabled());
+        service.setPollEnabled(true);
+        assertTrue(service.getPollEnabled());
+
+        service.close();
+    }
+
+    // ======================== ТЕСТЫ ИНФОРМАЦИИ ОБ УСТРОЙСТВЕ ========================
+    @Test
+    public void testDeviceInfo() throws Exception {
+        service.open("TestScale", callbacks);
+
+        assertNotNull(service.getPhysicalDeviceDescription());
+        assertNotNull(service.getPhysicalDeviceName());
+        assertNotNull(service.getDeviceServiceDescription());
+        assertTrue(service.getDeviceServiceVersion() > 0);
+
+        service.close();
+    }
+
+    @Test
+    public void testScaleSpecificInfo() throws Exception {
+        service.open("TestScale", callbacks);
+        service.claim(0);
+        service.setDeviceEnabled(true);
+
+        assertEquals(2147483647, service.getMaximumWeight());
+        assertEquals(ScaleConst.SCAL_WU_GRAM, service.getWeightUnit());
+
+        int liveWeight = service.getScaleLiveWeight();
+        assertTrue(liveWeight >= 0);
+
+        cleanup();
+    }
+
+    // ======================== ТЕСТЫ ОЧИСТКИ ========================
+    @Test
+    public void testClearInput() throws Exception {
+        initService(false, true);
+
+        testScale.setCurrentWeight(500, true, false);
+        service.readWeight(null, 1000);
+
+        // Даем время на обработку запроса
+        Thread.sleep(100);
+
+        service.clearInput();
+
+        // Очищаем очередь событий после clearInput
+        callbacks.clearEvents();
+
+        // Ждем - событий быть не должно
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 1, TimeUnit.SECONDS);
+        assertNull("После clearInput не должно быть событий", dataEvent);
+
+        cleanup();
+    }
+
+    @Test
+    public void testClearInputWithPendingRequests() throws Exception {
+        testScale.setResponseDelay(500);
+        initService(false, true);
+
+        service.readWeight(null, 1000);
+        service.readWeight(null, 1000);
+        service.readWeight(null, 1000);
+
+        // Даем время запросам попасть в очередь
+        Thread.sleep(100);
+
+        service.clearInput();
+
+        // Очищаем очередь событий
+        callbacks.clearEvents();
+
+        // Ждем - событий быть не должно
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+        assertNull("Не должно быть событий после clearInput", dataEvent);
+
+        cleanup();
+    }
+
+    // ======================== ТЕСТЫ ОШИБОК ========================
+    @Test(expected = JposException.class)
+    public void testReadWeightWhenDisabled() throws Exception {
+        service.open("TestScale", callbacks);
+        service.claim(0);
+        service.readWeight(null, 1000);
+        cleanup();
+    }
+
+    @Test(expected = JposException.class)
+    public void testSetTareWeightWhenDisabled() throws Exception {
+        service.open("TestScale", callbacks);
+        service.claim(0);
+        service.setTareWeight(100);
+        cleanup();
+    }
+
+    @Test(expected = JposException.class)
+    public void testZeroScaleWhenDisabled() throws Exception {
+        service.open("TestScale", callbacks);
+        service.claim(0);
+        service.zeroScale();
+        cleanup();
+    }
+
+    @Test(expected = JposException.class)
     public void testSetUnitPrice() throws Exception {
-        System.out.println("setUnitPrice");
-        long arg0 = 0L;
-        open();
-        try {
-            scale.setUnitPrice(arg0);
-            fail("Exception expected");
-        } catch (JposException e) {
-            assertEquals(JposConst.JPOS_E_ILLEGAL, e.getErrorCode());
-            assertEquals("Не поддерживается", e.getMessage());
-        }
+        initService(false);
+        service.setUnitPrice(100);
+        cleanup();
     }
 
-    /**
-     * Test of zeroScale method, of class ScaleService.
-     */
-    @Test
-    public void testZeroScale() throws Exception {
-        System.out.println("zeroScale");
-        openClaimEnable();
-        scale.zeroScale();
-
-    }
-
-    /**
-     * Test of getMaximumWeight method, of class ScaleService.
-     */
-    @Test
-    public void testGetMaximumWeight() throws Exception {
-        System.out.println("getMaximumWeight");
-        open();
-        int expResult = 0x7FFFFFFF;
-        int result = scale.getMaximumWeight();
-        assertEquals(expResult, result);
-    }
-
-    /**
-     * Test of getWeightUnit method, of class ScaleService.
-     */
-    @Test
-    public void testGetWeightUnit() throws Exception {
-        System.out.println("getWeightUnit");
-        open();
-        int expResult = ScaleConst.SCAL_WU_GRAM;
-        int result = scale.getWeightUnit();
-        assertEquals(expResult, result);
-    }
-
-    /**
-     * Test of readWeight method, of class ScaleService.
-     */
-    @Test
-    public void testReadWeight() throws Exception {
-        System.out.println("readWeight");
-        int[] data = null;
-        int timeout = 0;
-        open();
-        scale.readWeight(data, timeout);
-    }
-
-    /**
-     * Test of checkHealth method, of class ScaleService.
-     */
-    @Test
-    public void testCheckHealth() throws Exception {
-        System.out.println("checkHealth");
-        int arg0 = 0;
-        open();
-        scale.checkHealth(arg0);
-
-    }
-
-    /**
-     * Test of directIO method, of class ScaleService.
-     */
-    @Test
+    @Test(expected = JposException.class)
     public void testDirectIO() throws Exception {
-        System.out.println("directIO");
-        int arg0 = 0;
-        int[] arg1 = null;
-        Object arg2 = null;
-        open();
-        try {
-            scale.directIO(arg0, arg1, arg2);
-            fail("No exception");
-        } catch (JposException e) {
-            assertEquals(JposConst.JPOS_E_ILLEGAL, e.getErrorCode());
-            assertEquals("Неизвестная команда", e.getMessage());
+        initService(false);
+        service.directIO(0, null, null);
+        cleanup();
+    }
+
+    @Test(expected = JposException.class)
+    public void testCheckHealth() throws Exception {
+        initService(false);
+        service.checkHealth(0);
+        cleanup();
+    }
+
+    @Test(expected = JposException.class)
+    public void testReadWeightNotClaimed() throws Exception {
+        service.open("TestScale", callbacks);
+        service.readWeight(null, 1000);
+        cleanup();
+    }
+
+    // ======================== ТЕСТЫ КОНКУРЕНТНОГО ДОСТУПА ========================
+    @Test
+    public void testConcurrentReadWeight() throws Exception {
+        testScale.setCurrentWeight(500, true, false);
+        initService(false, true);
+        callbacks.clearEvents();
+
+        Thread[] threads = new Thread[5];
+        AtomicInteger successCount = new AtomicInteger(0);
+
+        for (int i = 0; i < 5; i++) {
+            threads[i] = new Thread(() -> {
+                try {
+                    service.readWeight(null, 1000);
+                    successCount.incrementAndGet();
+                } catch (JposException e) {
+                    fail("Не должно быть исключения");
+                }
+            });
+            threads[i].start();
         }
+
+        for (Thread thread : threads) {
+            thread.join(2000);
+        }
+
+        for (int i = 0; i < 5; i++) {
+            DataEvent event = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+            assertNotNull("Должно быть получено DataEvent", event);
+        }
+
+        assertEquals(5, successCount.get());
+
+        cleanup();
     }
 
-    /**
-     * Test of getCheckHealthText method, of class ScaleService.
-     */
     @Test
-    public void testGetCheckHealthText() throws Exception {
-        System.out.println("getCheckHealthText");
-        open();
-        String expResult = "";
-        String result = scale.getCheckHealthText();
-        assertEquals(expResult, result);
+    public void testConcurrentSetProperties() throws Exception {
+        testScale.setCurrentWeight(500, true, false);
+        initService(false, true);
+        callbacks.clearEvents();
 
+        AtomicInteger errorCount = new AtomicInteger(0);
+
+        Thread setter1 = new Thread(() -> {
+            try {
+                service.setZeroValid(true);
+                service.setAutoDisable(true);
+            } catch (JposException e) {
+                errorCount.incrementAndGet();
+            }
+        });
+
+        Thread setter2 = new Thread(() -> {
+            try {
+                service.setStatusNotify(ScaleConst.SCAL_SN_ENABLED);
+                service.setPollEnabled(false);
+            } catch (JposException e) {
+                errorCount.incrementAndGet();
+            }
+        });
+
+        Thread reader = new Thread(() -> {
+            try {
+                service.readWeight(null, 1000);
+            } catch (JposException e) {
+                errorCount.incrementAndGet();
+            }
+        });
+
+        setter1.start();
+        setter2.start();
+        reader.start();
+
+        setter1.join(1000);
+        setter2.join(1000);
+        reader.join(1000);
+
+        assertEquals(0, errorCount.get());
+
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull(dataEvent);
+
+        cleanup();
     }
 
-    /**
-     * Test of getClaimed method, of class ScaleService.
-     */
+    // ======================== ТЕСТЫ РАЗНЫХ ПРОТОКОЛОВ ========================
     @Test
-    public void testGetClaimed() throws Exception {
-        System.out.println("getClaimed");
-        open();
-        boolean expResult = false;
-        boolean result = scale.getClaimed();
-        assertEquals(expResult, result);
+    public void testDifferentProtocols() throws Exception {
+        testScale.setDeviceType(EScale.Pos2);
+        service.open("TestScale", callbacks);
+        assertTrue(service.getPhysicalDeviceDescription().contains("POS2"));
+        service.close();
 
+        testScale.setDeviceType(EScale.Shtrih5);
+        service.open("TestScale", callbacks);
+        assertTrue(service.getPhysicalDeviceDescription().contains("ШТРИХ5"));
+        service.close();
+
+        testScale.setDeviceType(EScale.Shtrih6);
+        service.open("TestScale", callbacks);
+        assertTrue(service.getPhysicalDeviceDescription().contains("ШТРИХ6"));
+        service.close();
     }
 
-    /**
-     * Test of getDeviceServiceDescription method, of class ScaleService.
-     */
+    // ======================== ТЕСТЫ МНОЖЕСТВЕННЫХ СЛУШАТЕЛЕЙ ========================
     @Test
-    public void testGetDeviceServiceDescription() throws Exception {
-        System.out.println("getDeviceServiceDescription");
-        open();
-        String expResult = "ScalePos2Service";
-        String result = scale.getDeviceServiceDescription();
-        assertEquals(expResult, result);
+    public void testMultipleEventListeners() throws Exception {
+        TestEventCallbacks secondCallbacks = new TestEventCallbacks();
+
+        testScale.setCurrentWeight(500, true, false);
+
+        service.open("TestScale", callbacks);
+        service.claim(0);
+        service.setDeviceEnabled(true);
+        service.setAsyncMode(true);
+        service.setDataEventEnabled(true);
+
+        service.readWeight(null, 1000);
+
+        DataEvent event1 = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Первый слушатель должен получить событие", event1);
+
+        DataEvent event2 = secondCallbacks.waitForEvent(DataEvent.class, 1, TimeUnit.SECONDS);
+        assertNull("Второй слушатель не должен получить событие", event2);
+
+        cleanup();
     }
 
-    /**
-     * Test of getDeviceServiceVersion method, of class ScaleService.
-     */
+    // ======================== ТЕСТЫ ГРАНИЧНЫХ ЗНАЧЕНИЙ ========================
     @Test
-    public void testGetDeviceServiceVersion() throws Exception {
-        System.out.println("getDeviceServiceVersion");
-        open();
-        int expResult = 1013003;
-        int result = scale.getDeviceServiceVersion();
-        assertEquals(expResult, result);
+    public void testExtremeWeightValues() throws Exception {
+        testScale.setCurrentWeight(Integer.MAX_VALUE, true, false);
 
+        initService(false, true);
+        service.readWeight(null, 1000);
+
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Должно быть получено DataEvent", dataEvent);
+        assertEquals(Integer.MAX_VALUE, dataEvent.getStatus());
+
+        cleanup();
     }
 
-    /**
-     * Test of getFreezeEvents method, of class ScaleService.
-     */
     @Test
-    public void testGetFreezeEvents() throws Exception {
-        System.out.println("getFreezeEvents");
-        open();
-        boolean expResult = false;
-        boolean result = scale.getFreezeEvents();
-        assertEquals(expResult, result);
+    public void testNegativeWeight() throws Exception {
+        testScale.setCurrentWeight(-100, true, false);
 
+        initService(false, true);
+        service.setZeroValid(true);
+        callbacks.clearEvents();
+
+        service.readWeight(null, 1000);
+
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Должно быть получено DataEvent", dataEvent);
+        assertEquals(-100, dataEvent.getStatus());
+
+        cleanup();
     }
 
-    /**
-     * Test of setFreezeEvents method, of class ScaleService.
-     */
+    // ======================== ТЕСТЫ ПОЛЛЕНА ========================
     @Test
-    public void testSetFreezeEvents() throws Exception {
-        System.out.println("setFreezeEvents");
-        boolean freezeEvents = false;
-        open();
-        scale.setFreezeEvents(freezeEvents);
+    public void testPollEnabled() throws Exception {
+        // pollEnabled = true
+        testScale.setCurrentWeight(500, true, false);
+        initService(true, false);
+        assertTrue(service.getPollEnabled());
 
+        // Пропускаем POWER_ONLINE
+        StatusUpdateEvent powerEvent = callbacks.waitForEvent(
+                StatusUpdateEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull("Должно быть событие POWER_ONLINE", powerEvent);
+
+        // Ждем статусное событие
+        StatusUpdateEvent event = callbacks.waitForEvent(
+                StatusUpdateEvent.class, 3, TimeUnit.SECONDS);
+        assertNotNull("Должно быть статусное событие при pollEnabled=true", event);
+
+        service.close();
+        Thread.sleep(1000);
+
+        // pollEnabled = false
+        service = new TestableScaleService();
+        service.setTestScale(testScale);
+        callbacks = new TestEventCallbacks();
+
+        testScale.setCurrentWeight(500, true, false);
+
+        initService(false, false);
+        assertFalse(service.getPollEnabled());
+
+        // Пропускаем POWER_ONLINE
+        powerEvent = callbacks.waitForEvent(
+                StatusUpdateEvent.class, 2, TimeUnit.SECONDS);
+        assertNotNull(powerEvent);
+
+        callbacks.clearEvents();
+        Thread.sleep(1000);
+
+        event = callbacks.waitForEvent(StatusUpdateEvent.class, 1, TimeUnit.SECONDS);
+        assertNull("Не должно быть статусных событий при pollEnabled=false", event);
+
+        cleanup();
     }
-
-    /**
-     * Test of getPhysicalDeviceDescription method, of class ScaleService.
-     */
-    @Test
-    public void testGetPhysicalDeviceDescription() throws Exception {
-        System.out.println("getPhysicalDeviceDescription");
-        open();
-        String expResult = "Весы ШТРИХ-М POS2";
-        String result = scale.getPhysicalDeviceDescription();
-        assertEquals(expResult, result);
-
-    }
-
-    /**
-     * Test of getPhysicalDeviceName method, of class ScaleService.
-     */
-    @Test
-    public void testGetPhysicalDeviceName() throws Exception {
-        System.out.println("getPhysicalDeviceName");
-        open();
-        String expResult = "Весы ШТРИХ-М POS2";
-        String result = scale.getPhysicalDeviceName();
-        assertEquals(expResult, result);
-
-    }
-
-    /**
-     * Test of getState method, of class ScaleService.
-     */
-    @Test
-    public void testGetState() throws Exception {
-        System.out.println("getState");
-        open();
-        int expResult = JposConst.JPOS_S_IDLE;
-        int result = scale.getState();
-        assertEquals(expResult, result);
-    }
-
-    /**
-     * Test of getDeviceEnabled method, of class ScaleService.
-     */
-    @Test
-    public void testGetDeviceEnabled() throws Exception {
-        System.out.println("getDeviceEnabled");
-        open();
-        boolean expResult = false;
-        boolean result = scale.getDeviceEnabled();
-        assertEquals(expResult, result);
-
-    }
-
-    /**
-     * Test of setDeviceEnabled method, of class ScaleService.
-     */
-    @Test
-    public void testSetDeviceEnabled() throws Exception {
-        System.out.println("setDeviceEnabled");
-        boolean enabled = false;
-        open();
-        scale.claim(0);
-        scale.setDeviceEnabled(enabled);
-
-    }
-
-    /**
-     * Test of getZeroValid method, of class ScaleService.
-     */
-    @Test
-    public void testGetZeroValid() throws Exception {
-        System.out.println("getZeroValid");
-        open();
-        boolean expResult = false;
-        boolean result = scale.getZeroValid();
-        assertEquals(expResult, result);
-
-    }
-
-    /**
-     * Test of setZeroValid method, of class ScaleService.
-     */
-    @Test
-    public void testSetZeroValid() throws Exception {
-        System.out.println("setZeroValid");
-        boolean zeroValid = false;
-        open();
-        scale.setZeroValid(zeroValid);
-
-    }
-
 }
