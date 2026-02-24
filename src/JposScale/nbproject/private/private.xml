@@ -3,16 +3,16 @@
     <editor-bookmarks xmlns="http://www.netbeans.org/ns/editor-bookmarks/2" lastBookmarkId="0"/>
     <open-files xmlns="http://www.netbeans.org/ns/projectui-open-files/2">
         <group>
-            <file>file:/D:/projects/Sinitsin/BsmartJposScale/src/JposScale/src/com/bsmart/scale/Pos2Serial.java</file>
-            <file>file:/D:/projects/Sinitsin/BsmartJposScale/src/JposScale/src/com/bsmart/jpos/scale/ScaleService.java</file>
-            <file>file:/D:/projects/Sinitsin/BsmartJposScale/src/JposScale/test/com/bsmart/jpos/scale/ScaleServiceTest.java</file>
-            <file>file:/D:/projects/Sinitsin/BsmartJposScale/src/JposScale/src/com/bsmart/IDevice.java</file>
-            <file>file:/D:/projects/Sinitsin/BsmartJposScale/src/JposScale/src/com/bsmart/scale/ScaleSerial.java</file>
-            <file>file:/D:/projects/Sinitsin/BsmartJposScale/src/JposScale/src/com/bsmart/scale/ScaleStatus.java</file>
-            <file>file:/D:/projects/Sinitsin/BsmartJposScale/src/JposScale/src/com/bsmart/util/ServiceVersionUtil.java</file>
-            <file>file:/D:/projects/Sinitsin/BsmartJposScale/src/JposScale/test/com/bsmart/jpos/scale/TestScaleSerial.java</file>
-            <file>file:/D:/projects/Sinitsin/BsmartJposScale/src/JposScale/src/com/bsmart/scale/DeviceMetrics.java</file>
-            <file>file:/D:/projects/Sinitsin/BsmartJposScale/src/JposScale/src/com/bsmart/scale/ScaleWeight.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/JposScale/test/com/bsmart/jpos/scale/Pos2ProtocolEmulator.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/jpos/scale/ScaleService.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/port/GnuSerialPort.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/jpos/EquipmentServiceInstanceFactory.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/JposScale/test/com/bsmart/jpos/scale/TestEventCallbacks.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/JposScale/test/com/bsmart/jpos/scale/TestScaleSerial.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/JposScale/test/JposEntryBuilder.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/JposScale/test/com/bsmart/jpos/scale/ScaleServiceTest.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/JposScale/test/com/bsmart/jpos/scale/AcceptanceScaleTest.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/JposScale/src/com/bsmart/jpos/Device.java</file>
         </group>
     </open-files>
 </project-private>

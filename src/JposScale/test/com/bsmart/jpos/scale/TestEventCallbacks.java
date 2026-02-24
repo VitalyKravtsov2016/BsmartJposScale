@@ -1,77 +1,98 @@
-/*
- * To change this license header, choose License Headers in Project Properties.
- * To change this template file, choose Tools | Templates
- * and open the template in the editor.
- */
 package com.bsmart.jpos.scale;
+
+import jpos.BaseControl;
+import jpos.events.DataEvent;
+import jpos.events.ErrorEvent;
+import jpos.events.JposEvent;
+import jpos.events.StatusUpdateEvent;
+import jpos.services.EventCallbacks;
 
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import jpos.BaseControl;
-import jpos.events.DataEvent;
-import jpos.events.DirectIOEvent;
-import jpos.events.ErrorEvent;
-import jpos.events.JposEvent;
-import jpos.events.OutputCompleteEvent;
-import jpos.events.StatusUpdateEvent;
-import jpos.services.EventCallbacks;
 
-/**
- *
- * @author User
- */
-/**
- * Реализация EventCallbacks для тестирования
- */
 public class TestEventCallbacks implements EventCallbacks {
 
-    private BlockingQueue<JposEvent> allEvents = new LinkedBlockingQueue<>();
+    private final BlockingQueue<JposEvent> eventQueue = new LinkedBlockingQueue<>();
+    private ErrorEvent lastErrorEvent = null;
+    private final Object errorEventLock = new Object();
 
     @Override
     public void fireDataEvent(DataEvent event) {
-        allEvents.offer(event);
-    }
-
-    @Override
-    public void fireDirectIOEvent(DirectIOEvent event) {
-        allEvents.offer(event);
+        eventQueue.offer(event);
     }
 
     @Override
     public void fireErrorEvent(ErrorEvent event) {
-        allEvents.offer(event);
+        synchronized (errorEventLock) {
+            lastErrorEvent = event;
+            eventQueue.offer(event);
+            errorEventLock.notifyAll(); // Уведомляем об получении ErrorEvent
+        }
     }
 
     @Override
-    public void fireOutputCompleteEvent(OutputCompleteEvent event) {
-        allEvents.offer(event);
+    public void fireOutputCompleteEvent(jpos.events.OutputCompleteEvent event) {
+        eventQueue.offer(event);
     }
 
     @Override
     public void fireStatusUpdateEvent(StatusUpdateEvent event) {
-        allEvents.offer(event);
+        eventQueue.offer(event);
     }
 
     @Override
-    public BaseControl getEventSource() {
-        return null;
+    public void fireDirectIOEvent(jpos.events.DirectIOEvent event) {
+        eventQueue.offer(event);
     }
 
-    public <T extends JposEvent> T waitForEvent(Class<T> eventType, long millis)
-            throws InterruptedException {
-        long deadline = System.currentTimeMillis() + millis;
+    public <T extends JposEvent> T waitForEvent(Class<T> eventClass, long timeoutMs) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
 
         while (System.currentTimeMillis() < deadline) {
-            JposEvent event = allEvents.poll(100, TimeUnit.MILLISECONDS);
-            if (event != null && eventType.isAssignableFrom(event.getClass())) {
-                return eventType.cast(event);
+            JposEvent event = eventQueue.poll(100, TimeUnit.MILLISECONDS);
+            if (event != null && eventClass.isAssignableFrom(event.getClass())) {
+                return eventClass.cast(event);
             }
         }
         return null;
     }
-    
+
+    public ErrorEvent waitForErrorEvent(long timeoutMs) throws InterruptedException {
+        synchronized (errorEventLock) {
+            if (lastErrorEvent != null) {
+                return lastErrorEvent;
+            }
+            errorEventLock.wait(timeoutMs);
+            return lastErrorEvent;
+        }
+    }
+
+    public void setErrorResponse(int errorResponse) {
+        synchronized (errorEventLock) {
+            if (lastErrorEvent != null) {
+                lastErrorEvent.setErrorResponse(errorResponse);
+                synchronized (lastErrorEvent) {
+                    lastErrorEvent.notifyAll(); // Уведомляем сервис
+                }
+            }
+        }
+    }
+
     public void clearEvents() {
-        allEvents.clear();
+        eventQueue.clear();
+        synchronized (errorEventLock) {
+            lastErrorEvent = null;
+        }
+    }
+
+    public ErrorEvent getLastErrorEvent() {
+        synchronized (errorEventLock) {
+            return lastErrorEvent;
+        }
+    }
+
+    public BaseControl getEventSource() {
+        return null;
     }
 }

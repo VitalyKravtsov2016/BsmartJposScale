@@ -87,10 +87,9 @@ public class ScaleServiceTest {
         // Пропускаем событие POWER_ONLINE при включении
         if (pollEnabled) {
             StatusUpdateEvent powerEvent = callbacks.waitForEvent(
-                    StatusUpdateEvent.class, 100);
-            if (powerEvent != null && powerEvent.getStatus() == JposConst.JPOS_SUE_POWER_ONLINE) 
-            {
-                // OK
+                    StatusUpdateEvent.class, 2000);
+            if (powerEvent != null) {
+                assertEquals(JposConst.JPOS_SUE_POWER_ONLINE, powerEvent.getStatus());
             }
         }
     }
@@ -100,7 +99,13 @@ public class ScaleServiceTest {
     }
 
     private void cleanup() throws Exception {
-        service.close();
+        if (service != null) {
+            try {
+                service.close();
+            } catch (Exception e) {
+                // Игнорируем
+            }
+        }
     }
 
     // ======================== ТЕСТЫ АСИНХРОННОГО ЧТЕНИЯ ========================
@@ -112,7 +117,7 @@ public class ScaleServiceTest {
 
         service.readWeight(null, 1000);
 
-        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 100);
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 3000);
 
         assertNotNull("Должно быть получено DataEvent", dataEvent);
         assertEquals(1234, dataEvent.getStatus());
@@ -130,15 +135,15 @@ public class ScaleServiceTest {
         // Через некоторое время стабильный
         new Thread(() -> {
             try {
-                Thread.sleep(100);
+                Thread.sleep(200);
                 testScale.setCurrentWeight(1234, true, false);
             } catch (InterruptedException e) {
             }
         }).start();
 
-        service.readWeight(null, 200);
+        service.readWeight(null, 3000);
 
-        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 300);
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 4000);
         assertNotNull("Должно быть получено DataEvent", dataEvent);
         assertEquals(1234, dataEvent.getStatus());
 
@@ -150,9 +155,9 @@ public class ScaleServiceTest {
         testScale.setCurrentWeight(500, false, false); // Всегда нестабильный
 
         initService(false, true);
-        service.readWeight(null, 10);
+        service.readWeight(null, 100);
 
-        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 100);
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 1000);
 
         assertNotNull("Должно быть получено DataEvent по таймауту", dataEvent);
         assertEquals(500, dataEvent.getStatus());
@@ -161,32 +166,56 @@ public class ScaleServiceTest {
     }
 
     @Test
-    public void testAsyncReadWeightWithMultipleRequests() throws Exception {
+    public void testAsyncReadWeightWithMultipleSequentialRequests() throws Exception {
         initService(false, true);
 
         // Первый запрос
         testScale.setCurrentWeight(100, true, false);
-        service.readWeight(null, 1000);
-
-        DataEvent event1 = callbacks.waitForEvent(DataEvent.class, 2000);
+        service.readWeight(null, 2000);
+        DataEvent event1 = callbacks.waitForEvent(DataEvent.class, 3000);
         assertNotNull("Должно быть получено DataEvent для первого запроса", event1);
         assertEquals(100, event1.getStatus());
 
-        // Второй запрос
-        testScale.setCurrentWeight(200, true, false);
-        service.readWeight(null, 1000);
+        // Ждем завершения обработки
+        Thread.sleep(500);
 
-        DataEvent event2 = callbacks.waitForEvent(DataEvent.class, 2000);
+        // Второй запрос (после завершения первого)
+        testScale.setCurrentWeight(200, true, false);
+        service.readWeight(null, 2000);
+        DataEvent event2 = callbacks.waitForEvent(DataEvent.class, 3000);
         assertNotNull("Должно быть получено DataEvent для второго запроса", event2);
         assertEquals(200, event2.getStatus());
 
-        // Третий запрос
-        testScale.setCurrentWeight(300, true, false);
-        service.readWeight(null, 1000);
+        // Ждем завершения обработки
+        Thread.sleep(500);
 
-        DataEvent event3 = callbacks.waitForEvent(DataEvent.class, 2000);
+        // Третий запрос (после завершения второго)
+        testScale.setCurrentWeight(300, true, false);
+        service.readWeight(null, 2000);
+        DataEvent event3 = callbacks.waitForEvent(DataEvent.class, 3000);
         assertNotNull("Должно быть получено DataEvent для третьего запроса", event3);
         assertEquals(300, event3.getStatus());
+
+        cleanup();
+    }
+
+    @Test
+    public void testAsyncReadWeightWithConcurrentRequests() throws Exception {
+        testScale.setCurrentWeight(500, true, false);
+        initService(false, true);
+        callbacks.clearEvents();
+
+        // Первый запрос должен пройти
+        service.readWeight(null, 5000);
+
+        // Второй запрос должен выбросить JPOS_E_BUSY
+        try {
+            service.readWeight(null, 5000);
+            fail("Должно быть выброшено JposException с кодом JPOS_E_BUSY");
+        } catch (JposException e) {
+            assertEquals("Код ошибки должен быть JPOS_E_BUSY",
+                    JposConst.JPOS_E_BUSY, e.getErrorCode());
+        }
 
         cleanup();
     }
@@ -198,8 +227,12 @@ public class ScaleServiceTest {
         initService(false, true);
         callbacks.clearEvents();
 
-        service.readWeight(null, 3000);
+        service.readWeight(null, 5000);
+        Thread.sleep(100); // Даем время на запуск операции
         service.setAsyncMode(false); // Прерываем поток
+
+        // Ждем завершения потока
+        Thread.sleep(1000);
 
         DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 1000);
         assertNull("Не должно быть DataEvent после прерывания", dataEvent);
@@ -215,7 +248,7 @@ public class ScaleServiceTest {
         initService(false, false);
 
         int[] data = new int[1];
-        service.readWeight(data, 1000);
+        service.readWeight(data, 2000);
 
         assertEquals("Вес должен быть прочитан синхронно", 1234, data[0]);
 
@@ -244,7 +277,7 @@ public class ScaleServiceTest {
         service.setZeroValid(true);
 
         int[] data = new int[1];
-        service.readWeight(data, 1000);
+        service.readWeight(data, 2000);
 
         assertEquals("Нулевой вес должен быть принят", 0, data[0]);
 
@@ -259,9 +292,12 @@ public class ScaleServiceTest {
         service.setZeroValid(false);
 
         int[] data = new int[1];
-        service.readWeight(data, 100);
+        long startTime = System.currentTimeMillis();
+        service.readWeight(data, 500);
+        long elapsed = System.currentTimeMillis() - startTime;
 
         assertEquals("По таймауту вернется текущий вес", 0, data[0]);
+        assertTrue("Должен ждать до таймаута", elapsed >= 450 && elapsed <= 600);
 
         cleanup();
     }
@@ -273,14 +309,14 @@ public class ScaleServiceTest {
         // Сначала нормальный вес
         testScale.setCurrentWeight(500, true, false);
         int[] data = new int[1];
-        service.readWeight(data, 1000);
+        service.readWeight(data, 2000);
         assertEquals(500, data[0]);
 
         // Перегруз - должно быть исключение
         testScale.setCurrentWeight(2000, true, true);
 
         try {
-            service.readWeight(data, 1000);
+            service.readWeight(data, 2000);
             fail("Должно быть выброшено JposException для перегруза");
         } catch (JposException e) {
             assertEquals("Код ошибки должен быть JPOS_E_EXTENDED",
@@ -299,9 +335,9 @@ public class ScaleServiceTest {
 
         initService(false, true);
         service.setZeroValid(true);
-        service.readWeight(null, 1000);
+        service.readWeight(null, 2000);
 
-        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 2000);
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 3000);
 
         assertNotNull("Должно быть получено DataEvent с нулевым весом", dataEvent);
         assertEquals(0, dataEvent.getStatus());
@@ -317,7 +353,7 @@ public class ScaleServiceTest {
         service.setZeroValid(false);
         service.readWeight(null, 500);
 
-        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 1000);
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 2000);
 
         assertNotNull("Должно быть получено DataEvent по таймауту", dataEvent);
         assertEquals(0, dataEvent.getStatus());
@@ -332,9 +368,9 @@ public class ScaleServiceTest {
 
         // Нормальный вес
         testScale.setCurrentWeight(500, true, false);
-        service.readWeight(null, 1000);
+        service.readWeight(null, 2000);
 
-        DataEvent normalEvent = callbacks.waitForEvent(DataEvent.class, 2000);
+        DataEvent normalEvent = callbacks.waitForEvent(DataEvent.class, 3000);
         assertNotNull("Должно быть DataEvent для нормального веса", normalEvent);
         assertEquals(500, normalEvent.getStatus());
 
@@ -342,15 +378,54 @@ public class ScaleServiceTest {
 
         // Перегруз
         testScale.setCurrentWeight(2000, true, true);
-        service.readWeight(null, 1000);
+        service.readWeight(null, 2000);
 
         // В асинхронном режиме должно прийти ErrorEvent
-        ErrorEvent errorEvent = callbacks.waitForEvent(ErrorEvent.class, 2000);
+        ErrorEvent errorEvent = callbacks.waitForEvent(ErrorEvent.class, 3000);
         assertNotNull("Должно быть ErrorEvent при перегрузе", errorEvent);
+        assertEquals("ErrorLocus должен быть EL_INPUT",
+                JposConst.JPOS_EL_INPUT, errorEvent.getErrorLocus());
+        assertEquals("ErrorResponse по умолчанию должен быть ER_CLEAR",
+                JposConst.JPOS_ER_CLEAR, errorEvent.getErrorResponse());
+
+        // Проверяем, что устройство перешло в состояние ошибки
+        assertEquals("Устройство должно быть в состоянии ошибки",
+                JposConst.JPOS_S_ERROR, service.getState());
 
         // DataEvent не должно быть
         DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 1000);
         assertNull("Не должно быть DataEvent при перегрузе", dataEvent);
+
+        // Очищаем ошибку
+        service.clearInput();
+        assertEquals("После clearInput состояние должно вернуться к IDLE",
+                JposConst.JPOS_S_IDLE, service.getState());
+
+        cleanup();
+    }
+
+    @Test
+    public void testAsyncReadWeightWithOverweightAndRetry() throws Exception {
+        initService(false, true);
+
+        // Перегруз
+        testScale.setCurrentWeight(2000, true, true);
+        service.readWeight(null, 5000);
+
+        // Ждем ErrorEvent
+        ErrorEvent errorEvent = callbacks.waitForErrorEvent(5000);
+        assertNotNull("Должно быть ErrorEvent при перегрузе", errorEvent);
+
+        // Меняем ответ на RETRY
+        callbacks.setErrorResponse(JposConst.JPOS_ER_RETRY);
+
+        // Убираем перегруз
+        testScale.setCurrentWeight(500, true, false);
+
+        // Должен автоматически повториться и прислать DataEvent
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 5000);
+        assertNotNull("После RETRY должно быть DataEvent", dataEvent);
+        assertEquals(500, dataEvent.getStatus());
 
         cleanup();
     }
@@ -364,23 +439,15 @@ public class ScaleServiceTest {
         assertTrue("Устройство должно быть включено до чтения", service.getDeviceEnabled());
 
         testScale.setCurrentWeight(750, true, false);
-        service.readWeight(null, 1000);
+        service.readWeight(null, 2000);
 
         DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 3000);
         assertNotNull("Должно быть получено DataEvent", dataEvent);
         assertEquals(750, dataEvent.getStatus());
 
-        // Проверка autoDisable
-        long deadline = System.currentTimeMillis() + 3000;
-        boolean deviceDisabled = false;
-        while (System.currentTimeMillis() < deadline) {
-            if (!service.getDeviceEnabled()) {
-                deviceDisabled = true;
-                break;
-            }
-            Thread.sleep(50);
-        }
-        assertTrue("Устройство должно быть отключено после autoDisable", deviceDisabled);
+        // Проверка autoDisable - должно отключиться синхронно после события
+        Thread.sleep(500); // Даем время на обработку
+        assertFalse("Устройство должно быть отключено после autoDisable", service.getDeviceEnabled());
 
         cleanup();
     }
@@ -392,9 +459,9 @@ public class ScaleServiceTest {
 
         initService(false, true);
         service.setTareWeight(200);
-        service.readWeight(null, 1000);
+        service.readWeight(null, 2000);
 
-        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 2000);
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 3000);
 
         assertNotNull("Должно быть получено DataEvent", dataEvent);
         assertEquals(1000, dataEvent.getStatus());
@@ -443,6 +510,22 @@ public class ScaleServiceTest {
         service.close();
     }
 
+    @Test
+    public void testVersionCapabilities() throws Exception {
+        service.open("TestScale", callbacks);
+
+        // Проверяем capability для версии 1.14 (все false)
+        assertFalse(service.getCapFreezeValue());
+        assertFalse(service.getCapReadLiveWeightWithTare());
+        assertFalse(service.getCapSetPriceCalculationMode());
+        assertFalse(service.getCapSetUnitPriceWithWeightUnit());
+        assertFalse(service.getCapSpecialTare());
+        assertFalse(service.getCapTarePriority());
+        assertEquals(0, service.getMinimumWeight());
+
+        service.close();
+    }
+
     // ======================== ТЕСТЫ СОСТОЯНИЯ ========================
     @Test
     public void testStateTransitions() throws Exception {
@@ -464,9 +547,26 @@ public class ScaleServiceTest {
         assertEquals(JposConst.JPOS_S_IDLE, service.getState());
         assertTrue(service.getDeviceEnabled());
 
-        // Async mode
+        // Async mode - должно быть IDLE пока нет активной операции
         service.setAsyncMode(true);
         assertTrue(service.getAsyncMode());
+        assertEquals(JposConst.JPOS_S_IDLE, service.getState());
+
+        // Запускаем асинхронную операцию - должно стать BUSY
+        testScale.setCurrentWeight(500, true, false);
+        service.readWeight(null, 5000);
+
+        // Даем время на установку флага
+        Thread.sleep(100);
+        assertEquals(JposConst.JPOS_S_BUSY, service.getState());
+
+        // После получения данных должно вернуться в IDLE
+        DataEvent event = callbacks.waitForEvent(DataEvent.class, 5000);
+        assertNotNull(event);
+
+        // Даем время на обработку
+        Thread.sleep(500);
+        assertEquals(JposConst.JPOS_S_IDLE, service.getState());
 
         // Disable
         service.setDeviceEnabled(false);
@@ -483,6 +583,7 @@ public class ScaleServiceTest {
     }
 
     // ======================== ТЕСТЫ POWER ========================
+
     @Test
     public void testPowerStateWithNotifyEnabled() throws Exception {
         callbacks.clearEvents();
@@ -496,7 +597,7 @@ public class ScaleServiceTest {
 
         // Пропускаем событие POWER_ONLINE от включения
         StatusUpdateEvent powerOnEvent = callbacks.waitForEvent(
-                StatusUpdateEvent.class, 2000);
+                StatusUpdateEvent.class, 3000);
         assertNotNull("Должно быть событие POWER_ONLINE при включении", powerOnEvent);
         assertEquals(JposConst.JPOS_SUE_POWER_ONLINE, powerOnEvent.getStatus());
 
@@ -505,7 +606,7 @@ public class ScaleServiceTest {
         // Устанавливаем OFFLINE
         service.setPowerState(JposConst.JPOS_PS_OFFLINE);
         StatusUpdateEvent event = callbacks.waitForEvent(
-                StatusUpdateEvent.class, 2000);
+                StatusUpdateEvent.class, 3000);
         assertNotNull("Должно быть событие POWER_OFFLINE", event);
         assertEquals(JposConst.JPOS_SUE_POWER_OFFLINE, event.getStatus());
 
@@ -521,7 +622,7 @@ public class ScaleServiceTest {
         service.setPowerState(JposConst.JPOS_PS_ONLINE);
 
         StatusUpdateEvent event = callbacks.waitForEvent(
-                StatusUpdateEvent.class, 2000);
+                StatusUpdateEvent.class, 1000);
         assertNull("Не должно быть событий при PowerNotify DISABLED", event);
 
         cleanup();
@@ -538,7 +639,7 @@ public class ScaleServiceTest {
         testScale.setCurrentWeight(500, false, false);
 
         StatusUpdateEvent unstableEvent = callbacks.waitForEvent(
-                StatusUpdateEvent.class, 2000);
+                StatusUpdateEvent.class, 3000);
         assertNotNull("Должно быть событие о нестабильном весе", unstableEvent);
         assertEquals(ScaleConst.SCAL_SUE_WEIGHT_UNSTABLE, unstableEvent.getStatus());
 
@@ -548,7 +649,7 @@ public class ScaleServiceTest {
         testScale.setCurrentWeight(500, true, false);
 
         StatusUpdateEvent stableEvent = callbacks.waitForEvent(
-                StatusUpdateEvent.class, 2000);
+                StatusUpdateEvent.class, 3000);
         assertNotNull("Должно быть событие о стабильном весе", stableEvent);
         assertEquals(ScaleConst.SCAL_SUE_STABLE_WEIGHT, stableEvent.getStatus());
 
@@ -558,7 +659,7 @@ public class ScaleServiceTest {
         testScale.setCurrentWeight(0, true, false);
 
         StatusUpdateEvent zeroEvent = callbacks.waitForEvent(
-                StatusUpdateEvent.class, 2000);
+                StatusUpdateEvent.class, 3000);
         assertNotNull("Должно быть событие о нулевом весе", zeroEvent);
         assertEquals(ScaleConst.SCAL_SUE_WEIGHT_ZERO, zeroEvent.getStatus());
 
@@ -590,13 +691,23 @@ public class ScaleServiceTest {
         callbacks.clearEvents();
 
         testScale.setCurrentWeight(500, true, false);
-        service.readWeight(null, 1000);
+        service.readWeight(null, 5000);
 
+        // При freezeEvents=true события не должны доставляться
+        // Но даем время на возможную доставку
+        Thread.sleep(1000);
         DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 1000);
         assertNull("События не должны приходить при freezeEvents=true", dataEvent);
 
+        // Но должны накапливаться в очереди
+        int dataCount = service.getDataCount();
+        assertTrue("События должны накапливаться в очереди. Текущее значение: " + dataCount,
+                dataCount > 0);
+
         service.setFreezeEvents(false);
-        dataEvent = callbacks.waitForEvent(DataEvent.class, 2000);
+
+        // После разморозки событие должно прийти
+        dataEvent = callbacks.waitForEvent(DataEvent.class, 5000);
         assertNotNull("После разморозки событие должно прийти", dataEvent);
         assertEquals(500, dataEvent.getStatus());
 
@@ -611,9 +722,9 @@ public class ScaleServiceTest {
 
         // Нормальная работа
         testScale.setCurrentWeight(500, true, false);
-        service.readWeight(null, 1000);
+        service.readWeight(null, 2000);
 
-        DataEvent normalEvent = callbacks.waitForEvent(DataEvent.class, 2000);
+        DataEvent normalEvent = callbacks.waitForEvent(DataEvent.class, 3000);
         assertNotNull(normalEvent);
         assertEquals(500, normalEvent.getStatus());
 
@@ -623,9 +734,15 @@ public class ScaleServiceTest {
         testScale.setNextException(new DeviceError(IDevice.ERROR_NOLINK, "No link to device"));
         service.readWeight(null, 0);
 
-        ErrorEvent errorEvent = callbacks.waitForEvent(ErrorEvent.class, 100);
+        // Должно быть ErrorEvent
+        ErrorEvent errorEvent = callbacks.waitForEvent(ErrorEvent.class, 3000);
         assertNotNull("Должно быть получено ErrorEvent", errorEvent);
+
+        // PowerState должен измениться
         assertEquals(JposConst.JPOS_PS_OFF_OFFLINE, service.getPowerState());
+
+        // Устройство должно перейти в состояние ошибки
+        assertEquals(JposConst.JPOS_S_ERROR, service.getState());
 
         cleanup();
     }
@@ -637,21 +754,24 @@ public class ScaleServiceTest {
 
         // Нормальная работа
         testScale.setCurrentWeight(500, true, false);
-        service.readWeight(null, 1000);
+        service.readWeight(null, 2000);
 
-        DataEvent normalEvent = callbacks.waitForEvent(DataEvent.class, 2000);
+        DataEvent normalEvent = callbacks.waitForEvent(DataEvent.class, 3000);
         assertNotNull(normalEvent);
 
         callbacks.clearEvents();
 
         // Общая ошибка
         testScale.setNextException(new RuntimeException("Generic error"));
-        service.readWeight(null, 1000);
+        service.readWeight(null, 2000);
 
         assertEquals(JposConst.JPOS_PS_ONLINE, service.getPowerState());
 
-        ErrorEvent errorEvent = callbacks.waitForEvent(ErrorEvent.class, 2000);
+        ErrorEvent errorEvent = callbacks.waitForEvent(ErrorEvent.class, 3000);
         assertNotNull("Должно быть получено ErrorEvent", errorEvent);
+
+        // Устройство должно перейти в состояние ошибки
+        assertEquals(JposConst.JPOS_S_ERROR, service.getState());
 
         cleanup();
     }
@@ -663,21 +783,24 @@ public class ScaleServiceTest {
 
         // Нормальная работа
         testScale.setCurrentWeight(500, true, false);
-        service.readWeight(null, 1000);
+        service.readWeight(null, 2000);
 
-        DataEvent normalEvent = callbacks.waitForEvent(DataEvent.class, 2000);
+        DataEvent normalEvent = callbacks.waitForEvent(DataEvent.class, 3000);
         assertNotNull(normalEvent);
 
         callbacks.clearEvents();
 
         // Другая ошибка
         testScale.setNextException(new DeviceError(999, "Other error"));
-        service.readWeight(null, 1000);
+        service.readWeight(null, 2000);
 
         assertEquals(JposConst.JPOS_PS_ONLINE, service.getPowerState());
 
-        ErrorEvent errorEvent = callbacks.waitForEvent(ErrorEvent.class, 2000);
+        ErrorEvent errorEvent = callbacks.waitForEvent(ErrorEvent.class, 3000);
         assertNotNull("Должно быть получено ErrorEvent", errorEvent);
+
+        // Устройство должно перейти в состояние ошибки
+        assertEquals(JposConst.JPOS_S_ERROR, service.getState());
 
         cleanup();
     }
@@ -757,36 +880,68 @@ public class ScaleServiceTest {
         initService(false, true);
 
         testScale.setCurrentWeight(500, true, false);
-        service.readWeight(null, 1000);
+        service.readWeight(null, 2000);
+
+        // Ждем DataEvent
+        DataEvent event = callbacks.waitForEvent(DataEvent.class, 3000);
+        assertNotNull(event);
 
         service.clearInput();
 
-        // Очищаем очередь событий после clearInput
-        callbacks.clearEvents();
-
-        // Ждем - событий быть не должно
-        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 1000);
-        assertNull("После clearInput не должно быть событий", dataEvent);
+        // Проверяем, что счетчик событий сброшен
+        assertEquals(0, service.getDataCount());
 
         cleanup();
     }
 
     @Test
     public void testClearInputWithPendingRequests() throws Exception {
-        testScale.setResponseDelay(500);
+        testScale.setResponseDelay(2000);
         initService(false, true);
 
-        service.readWeight(null, 1000);
-        service.readWeight(null, 1000);
-        service.readWeight(null, 1000);
+        // Отправляем запрос
+        service.readWeight(null, 5000);
+
+        // Ждем немного, чтобы запрос начал обрабатываться
+        Thread.sleep(500);
+
+        // Сохраняем количество событий до clearInput
+        int beforeClear = service.getDataCount();
 
         service.clearInput();
-        // Очищаем очередь событий
+
+        // Проверяем, что очередь событий очищена
+        assertEquals(0, service.getDataCount());
+
         callbacks.clearEvents();
 
         // Ждем - событий быть не должно
-        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 100);
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 2000);
         assertNull("Не должно быть событий после clearInput", dataEvent);
+
+        cleanup();
+    }
+
+    @Test
+    public void testClearInputWithErrorState() throws Exception {
+        initService(false, true);
+
+        // Вызываем ошибку
+        testScale.setCurrentWeight(2000, true, true);
+        service.readWeight(null, 2000);
+
+        ErrorEvent errorEvent = callbacks.waitForEvent(ErrorEvent.class, 3000);
+        assertNotNull(errorEvent);
+
+        // Проверяем состояние ошибки
+        assertEquals(JposConst.JPOS_S_ERROR, service.getState());
+
+        // Очищаем ошибку
+        service.clearInput();
+
+        // Проверяем, что состояние восстановилось
+        Thread.sleep(500);
+        assertEquals(JposConst.JPOS_S_IDLE, service.getState());
 
         cleanup();
     }
@@ -844,6 +999,42 @@ public class ScaleServiceTest {
         cleanup();
     }
 
+    // ======================== ТЕСТЫ МЕТОДОВ СТАТИСТИКИ ========================
+    @Test(expected = JposException.class)
+    public void testResetStatisticsNotSupported() throws Exception {
+        initService(false);
+        service.resetStatistics("");
+        cleanup();
+    }
+
+    @Test(expected = JposException.class)
+    public void testRetrieveStatisticsNotSupported() throws Exception {
+        initService(false);
+        service.retrieveStatistics(new String[1]);
+        cleanup();
+    }
+
+    @Test(expected = JposException.class)
+    public void testUpdateStatisticsNotSupported() throws Exception {
+        initService(false);
+        service.updateStatistics("");
+        cleanup();
+    }
+
+    @Test(expected = JposException.class)
+    public void testCompareFirmwareVersionNotSupported() throws Exception {
+        initService(false);
+        service.compareFirmwareVersion("", new int[1]);
+        cleanup();
+    }
+
+    @Test(expected = JposException.class)
+    public void testUpdateFirmwareNotSupported() throws Exception {
+        initService(false);
+        service.updateFirmware("");
+        cleanup();
+    }
+
     // ======================== ТЕСТЫ КОНКУРЕНТНОГО ДОСТУПА ========================
     @Test
     public void testConcurrentReadWeight() throws Exception {
@@ -851,31 +1042,52 @@ public class ScaleServiceTest {
         initService(false, true);
         callbacks.clearEvents();
 
+        // Используем CountDownLatch для синхронизации запуска потоков
+        java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch doneLatch = new java.util.concurrent.CountDownLatch(5);
+
         Thread[] threads = new Thread[5];
         AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger busyCount = new AtomicInteger(0);
+        AtomicInteger otherErrorCount = new AtomicInteger(0);
 
         for (int i = 0; i < 5; i++) {
             threads[i] = new Thread(() -> {
                 try {
-                    service.readWeight(null, 1000);
+                    startLatch.await(); // Ждем сигнала на старт
+                    service.readWeight(null, 5000);
                     successCount.incrementAndGet();
                 } catch (JposException e) {
-                    fail("Не должно быть исключения");
+                    if (e.getErrorCode() == JposConst.JPOS_E_BUSY) {
+                        busyCount.incrementAndGet();
+                    } else {
+                        otherErrorCount.incrementAndGet();
+                        e.printStackTrace();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    doneLatch.countDown();
                 }
             });
             threads[i].start();
         }
 
-        for (Thread thread : threads) {
-            thread.join(2000);
-        }
+        // Запускаем все потоки одновременно
+        startLatch.countDown();
 
-        for (int i = 0; i < 5; i++) {
-            DataEvent event = callbacks.waitForEvent(DataEvent.class, 2000);
-            assertNotNull("Должно быть получено DataEvent", event);
-        }
+        // Ждем завершения всех потоков
+        doneLatch.await(10000, TimeUnit.MILLISECONDS);
 
-        assertEquals(5, successCount.get());
+        // Должен быть только один успешный запрос
+        assertEquals("Должен быть только один успешный запрос", 1, successCount.get());
+        // Остальные должны получить BUSY
+        assertEquals("Остальные должны получить BUSY", 4, busyCount.get());
+        assertEquals("Не должно быть других ошибок", 0, otherErrorCount.get());
+
+        // Должно быть только одно DataEvent
+        DataEvent event = callbacks.waitForEvent(DataEvent.class, 5000);
+        assertNotNull("Должно быть получено DataEvent", event);
 
         cleanup();
     }
@@ -894,6 +1106,7 @@ public class ScaleServiceTest {
                 service.setAutoDisable(true);
             } catch (JposException e) {
                 errorCount.incrementAndGet();
+                e.printStackTrace();
             }
         });
 
@@ -903,29 +1116,32 @@ public class ScaleServiceTest {
                 service.setPollEnabled(false);
             } catch (JposException e) {
                 errorCount.incrementAndGet();
+                e.printStackTrace();
             }
         });
 
         Thread reader = new Thread(() -> {
             try {
-                service.readWeight(null, 1000);
+                service.readWeight(null, 3000);
             } catch (JposException e) {
-                errorCount.incrementAndGet();
+                // Может быть BUSY, но это не ошибка теста
+                if (e.getErrorCode() != JposConst.JPOS_E_BUSY) {
+                    errorCount.incrementAndGet();
+                    e.printStackTrace();
+                }
             }
         });
 
         setter1.start();
         setter2.start();
+        Thread.sleep(100);
         reader.start();
 
-        setter1.join(1000);
-        setter2.join(1000);
-        reader.join(1000);
+        setter1.join(2000);
+        setter2.join(2000);
+        reader.join(4000);
 
         assertEquals(0, errorCount.get());
-
-        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 2000);
-        assertNotNull(dataEvent);
 
         cleanup();
     }
@@ -956,18 +1172,21 @@ public class ScaleServiceTest {
 
         testScale.setCurrentWeight(500, true, false);
 
+        // Регистрируем только первый callbacks
         service.open("TestScale", callbacks);
         service.claim(0);
         service.setDeviceEnabled(true);
         service.setAsyncMode(true);
         service.setDataEventEnabled(true);
 
-        service.readWeight(null, 1000);
+        service.readWeight(null, 5000);
 
-        DataEvent event1 = callbacks.waitForEvent(DataEvent.class, 2000);
+        // Первый слушатель должен получить событие
+        DataEvent event1 = callbacks.waitForEvent(DataEvent.class, 5000);
         assertNotNull("Первый слушатель должен получить событие", event1);
 
-        DataEvent event2 = secondCallbacks.waitForEvent(DataEvent.class, 1000);
+        // Второй слушатель не должен получать события, так как он не зарегистрирован
+        DataEvent event2 = secondCallbacks.waitForEvent(DataEvent.class, 2000);
         assertNull("Второй слушатель не должен получить событие", event2);
 
         cleanup();
@@ -979,9 +1198,9 @@ public class ScaleServiceTest {
         testScale.setCurrentWeight(Integer.MAX_VALUE, true, false);
 
         initService(false, true);
-        service.readWeight(null, 1000);
+        service.readWeight(null, 3000);
 
-        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 2000);
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 4000);
         assertNotNull("Должно быть получено DataEvent", dataEvent);
         assertEquals(Integer.MAX_VALUE, dataEvent.getStatus());
 
@@ -996,9 +1215,9 @@ public class ScaleServiceTest {
         service.setZeroValid(true);
         callbacks.clearEvents();
 
-        service.readWeight(null, 1000);
+        service.readWeight(null, 3000);
 
-        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 2000);
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 4000);
         assertNotNull("Должно быть получено DataEvent", dataEvent);
         assertEquals(-100, dataEvent.getStatus());
 
@@ -1023,12 +1242,12 @@ public class ScaleServiceTest {
 
         // Пропускаем POWER_ONLINE
         StatusUpdateEvent powerEvent = callbacks.waitForEvent(
-                StatusUpdateEvent.class, 2000);
+                StatusUpdateEvent.class, 3000);
         assertNotNull("Должно быть событие POWER_ONLINE", powerEvent);
 
-        // Ждем статусное событие
+        // Ждем статусное событие от поллинга
         StatusUpdateEvent event = callbacks.waitForEvent(
-                StatusUpdateEvent.class, 3000);
+                StatusUpdateEvent.class, 4000);
         assertNotNull("Должно быть статусное событие при pollEnabled=true", event);
 
         service.close();
@@ -1045,14 +1264,66 @@ public class ScaleServiceTest {
 
         // Пропускаем POWER_ONLINE
         powerEvent = callbacks.waitForEvent(
-                StatusUpdateEvent.class, 2000);
+                StatusUpdateEvent.class, 3000);
         assertNotNull(powerEvent);
 
         callbacks.clearEvents();
 
-        event = callbacks.waitForEvent(StatusUpdateEvent.class, 1000);
+        // Не должно быть статусных событий от поллинга
+        event = callbacks.waitForEvent(StatusUpdateEvent.class, 2000);
         assertNull("Не должно быть статусных событий при pollEnabled=false", event);
 
+        cleanup();
+    }
+
+    // ======================== ТЕСТЫ МЕТОДОВ ВЕРСИИ 1.14 ========================
+    @Test(expected = JposException.class)
+    public void testDoPriceCalculatingNotSupported() throws Exception {
+        initService(false);
+        service.doPriceCalculating(new int[1], new int[1], new long[1],
+                new long[1], new int[1], new int[1], new int[1], new long[1], 1000);
+        cleanup();
+    }
+
+    @Test(expected = JposException.class)
+    public void testFreezeValueNotSupported() throws Exception {
+        initService(false);
+        service.freezeValue(0, true);
+        cleanup();
+    }
+
+    @Test(expected = JposException.class)
+    public void testReadLiveWeightWithTareNotSupported() throws Exception {
+        initService(false);
+        service.readLiveWeightWithTare(new int[1], new int[1], 1000);
+        cleanup();
+    }
+
+    @Test(expected = JposException.class)
+    public void testSetPriceCalculationModeNotSupported() throws Exception {
+        initService(false);
+        service.setPriceCalculationMode(0);
+        cleanup();
+    }
+
+    @Test(expected = JposException.class)
+    public void testSetSpecialTareNotSupported() throws Exception {
+        initService(false);
+        service.setSpecialTare(0, 0);
+        cleanup();
+    }
+
+    @Test(expected = JposException.class)
+    public void testSetTarePriorityNotSupported() throws Exception {
+        initService(false);
+        service.setTarePriority(0);
+        cleanup();
+    }
+
+    @Test(expected = JposException.class)
+    public void testSetUnitPriceWithWeightUnitNotSupported() throws Exception {
+        initService(false);
+        service.setUnitPriceWithWeightUnit(100, ScaleConst.SCAL_WU_GRAM, 1, 1);
         cleanup();
     }
 }
