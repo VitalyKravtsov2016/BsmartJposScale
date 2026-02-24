@@ -67,7 +67,7 @@ public class Pos2Serial extends ScaleSerial {
     private ScaleWeight weight = new ScaleWeight(0, 0, new ScaleStatus(0));
     private ChannelParams channelParams = new ChannelParams();
     private CalibrationStatus calibrationStatus = new CalibrationStatus(0, 0, 0);
-    private DeviceMetrics deviceMetrics = new DeviceMetrics(0, 0, 0, 0, 0, 0, "");
+    private DeviceMetrics deviceMetrics = new DeviceMetrics();
 
     // Параметры обмена
     private int exchangeBaudRate = BAUDRATE_9600;
@@ -419,7 +419,14 @@ public class Pos2Serial extends ScaleSerial {
         int model = reply.readByte();
         int lang = reply.readByte();
         String description = reply.readString(charsetName);
-        deviceMetrics = new DeviceMetrics(type, subType, majorVersion, minorVersion, model, lang, description);
+        deviceMetrics = new DeviceMetrics();
+        deviceMetrics.setType(type);
+        deviceMetrics.setSubType(subType);
+        deviceMetrics.setMajorVersion(majorVersion);
+        deviceMetrics.setMinorVersion(minorVersion);
+        deviceMetrics.setModel(model);
+        deviceMetrics.setLang(lang);
+        deviceMetrics.setDescription(description);
     }
 
     // ==================== ГЕТТЕРЫ ДЛЯ НОВЫХ ПАРАМЕТРОВ ====================

@@ -1029,7 +1029,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
             if (System.currentTimeMillis() > (startTime + timeout)) {
                 return weight.weight;
             }
-            Thread.sleep(100);
+            Thread.sleep(10);
         }
         throw new InterruptedException("Thread interrupted while reading weight");
     }
@@ -1089,6 +1089,9 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
     private JposException getJposException(Exception e) {
         logger.error("Exception caught", e);
+        if (e instanceof JposException){
+            return (JposException)e;
+        }
         if (e instanceof DeviceError) {
             DeviceError deviceError = (DeviceError) e;
             switch (deviceError.getCode()) {
