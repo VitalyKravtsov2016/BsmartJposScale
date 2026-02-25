@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit;
 public class TestEventCallbacks implements EventCallbacks {
 
     private final BlockingQueue<JposEvent> eventQueue = new LinkedBlockingQueue<>();
-    private ErrorEvent lastErrorEvent = null;
+    private int lastErrorResponse = 0;
     private final Object errorEventLock = new Object();
 
     @Override
@@ -25,9 +25,8 @@ public class TestEventCallbacks implements EventCallbacks {
     @Override
     public void fireErrorEvent(ErrorEvent event) {
         synchronized (errorEventLock) {
-            lastErrorEvent = event;
+            event.setErrorResponse(lastErrorResponse);
             eventQueue.offer(event);
-            errorEventLock.notifyAll(); // Уведомляем об получении ErrorEvent
         }
     }
 
@@ -58,38 +57,14 @@ public class TestEventCallbacks implements EventCallbacks {
         return null;
     }
 
-    public ErrorEvent waitForErrorEvent(long timeoutMs) throws InterruptedException {
-        synchronized (errorEventLock) {
-            if (lastErrorEvent != null) {
-                return lastErrorEvent;
-            }
-            errorEventLock.wait(timeoutMs);
-            return lastErrorEvent;
-        }
-    }
-
     public void setErrorResponse(int errorResponse) {
         synchronized (errorEventLock) {
-            if (lastErrorEvent != null) {
-                lastErrorEvent.setErrorResponse(errorResponse);
-                synchronized (lastErrorEvent) {
-                    lastErrorEvent.notifyAll(); // Уведомляем сервис
-                }
-            }
+            lastErrorResponse = errorResponse;
         }
     }
 
     public void clearEvents() {
         eventQueue.clear();
-        synchronized (errorEventLock) {
-            lastErrorEvent = null;
-        }
-    }
-
-    public ErrorEvent getLastErrorEvent() {
-        synchronized (errorEventLock) {
-            return lastErrorEvent;
-        }
     }
 
     public BaseControl getEventSource() {

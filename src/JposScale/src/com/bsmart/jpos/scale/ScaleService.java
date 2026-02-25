@@ -1,10 +1,9 @@
 package com.bsmart.jpos.scale;
 
-import java.util.List;
-import java.util.ArrayList;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
@@ -40,204 +39,552 @@ import jpos.events.OutputCompleteEvent;
 import jpos.services.EventCallbacks;
 import jpos.services.ScaleService113;
 
+/**
+ * Реализация сервиса весов для JPOS 1.13 с полным логированием
+ */
 public class ScaleService extends Scale implements ScaleService113, ScaleConst, JposConst, JposEntryConst {
 
-    /**
-     *
-     */
     private static final long serialVersionUID = 6309237509625068100L;
     private final Logger logger = LogManager.getLogger(ScaleService.class);
-    private final int S_CLOSED = 0;
-    private final int S_OPENED = 1;
-    private final int S_CLAIMED = 2;
-    private final int S_ENABLED = 3;
-    private final int S_ERROR = 4; // Добавлено состояние ошибки
 
+    // Константы
+    private static final int POLL_INTERVAL_MS = 100;
+    private static final int THREAD_STOP_TIMEOUT_MS = 1000;
+    private static final int MAX_RETRY_COUNT = 3;
+
+    // Свойства UPOS
     private boolean zeroValid = false;
     private int statusNotify = SCAL_SN_DISABLED;
     private int powerNotify = JPOS_PN_DISABLED;
     private int powerState = JPOS_PS_UNKNOWN;
-    private ScaleSerial scale = null;
-    private DeviceMetrics deviceMetrics;
-    private int state = S_CLOSED;
+    private boolean deviceEnabled = false;
+    private boolean claimed = false;
     private boolean asyncMode = false;
-    private EventCallbacks eventsCallback = null;
-    private String m_logicalName = null;
     private boolean dataEventEnabled = false;
     private boolean freezeEvents = false;
     private boolean autoDisable = false;
     private int tareWeight = 0;
-    private ScaleWeight m_weight = null;
+    private long unitPrice = 0;
+    private long salesPrice = 0;
+
+    // Состояние устройства
+    private int state = JPOS_S_CLOSED;
+    private ScaleSerial scale = null;
+    private DeviceMetrics deviceMetrics;
+    private ScaleWeight currentWeight = null;
+    private long scaleLiveWeight = 0;
+    private int maximumWeight = 0;
+    private int minimumWeight = 0;
+    private int weightUnit = SCAL_WU_GRAM;
+
+    // Потоки и очереди
+    private EventCallbacks eventsCallback = null;
+    private String logicalName = null;
     private Thread eventThread = null;
     private Thread pollThread = null;
     private Thread weightThread = null;
-    private long scaleLiveWeight = 0;
     private final BlockingQueue<JposEvent> eventQueue = new LinkedBlockingQueue<>();
-    private final BlockingQueue<WeightRequest> requests = new LinkedBlockingQueue<>();
+    private final BlockingQueue<WeightRequest> requestQueue = new LinkedBlockingQueue<>();
+
+    // Управление запросами
+    private volatile WeightRequest currentRequest = null;
+    private final AtomicInteger requestIdGenerator = new AtomicInteger(0);
+
+    // Флаги
     private boolean pollEnabled = true;
 
-    // Флаг для отслеживания активной асинхронной операции
-    private volatile boolean asyncOperationInProgress = false;
+    // ======================== ВНУТРЕННИЕ КЛАССЫ ========================
+    private static class WeightRequest {
 
-    // Храним текущий запрос для возможности повтора
-    private volatile WeightRequest currentRequest = null;
+        private final int id;
+        private final int timeout;
+        private int retryCount = 0;
 
-    public void setPollEnabled(boolean pollEnabled) throws JposException {
-        this.pollEnabled = pollEnabled;
-    }
-
-    public boolean getPollEnabled() throws JposException {
-        return pollEnabled;
-    }
-
-    public boolean getCapCompareFirmwareVersion() throws JposException {
-        logger.debug("getCapCompareFirmwareVersion()");
-        boolean result = false;
-        checkOpened();
-        logger.debug("getCapCompareFirmwareVersion = " + String.valueOf(result));
-        return result;
-    }
-
-    public boolean getCapStatusUpdate() throws JposException {
-        logger.debug("getCapStatusUpdate()");
-        boolean result = true;
-        checkOpened();
-        logger.debug("getCapStatusUpdate = " + String.valueOf(result));
-        return result;
-    }
-
-    public boolean getCapUpdateFirmware() throws JposException {
-        logger.debug("getCapUpdateFirmware()");
-        boolean result = false;
-        checkOpened();
-        logger.debug("getCapUpdateFirmware = " + String.valueOf(result));
-        return result;
-    }
-
-    public boolean getCapDisplay() throws JposException {
-        logger.debug("getCapDisplay()");
-        boolean result = false;
-        checkOpened();
-        logger.debug("getCapDisplay = " + String.valueOf(result));
-        return result;
-    }
-
-    public boolean getCapStatisticsReporting() throws JposException {
-        logger.debug("getCapStatisticsReporting()");
-        boolean result = false;
-        checkOpened();
-        logger.debug("getCapStatisticsReporting = " + String.valueOf(result));
-        return result;
-    }
-
-    public boolean getCapUpdateStatistics() throws JposException {
-        logger.debug("getCapUpdateStatistics()");
-        boolean result = false;
-        checkOpened();
-        logger.debug("getCapUpdateStatistics = " + String.valueOf(result));
-        return result;
-    }
-
-    public boolean getCapDisplayText() throws JposException {
-        logger.debug("getCapDisplayText()");
-        boolean result = false;
-        checkOpened();
-        logger.debug("getCapDisplayText = " + String.valueOf(result));
-        return result;
-    }
-
-    public int getCapPowerReporting() throws JposException {
-        logger.debug("getCapPowerReporting()");
-        int result = JPOS_PR_STANDARD;
-        checkOpened();
-        logger.debug("getCapPowerReporting = " + JposUtils.getCapPowerReportingText(result));
-        return result;
-    }
-
-    public boolean getCapPriceCalculating() throws JposException {
-        logger.debug("getCapPriceCalculating()");
-        boolean result = false;
-        checkOpened();
-        logger.debug("getCapPriceCalculating = " + String.valueOf(result));
-        return result;
-    }
-
-    public boolean getCapTareWeight() throws JposException {
-        logger.debug("getCapTareWeight()");
-        boolean result = true;
-        checkOpened();
-        logger.debug("getCapTareWeight = " + String.valueOf(result));
-        return result;
-    }
-
-    public boolean getCapZeroScale() throws JposException {
-        logger.debug("getCapZeroScale()");
-
-        checkOpened();
-        boolean result = false;
-        if (scale.getType() == EScale.Pos2) {
-            result = true;
+        WeightRequest(int timeout) {
+            this.id = this.hashCode();
+            this.timeout = timeout;
         }
-        logger.debug("getCapZeroScale = " + String.valueOf(result));
+
+        public int getId() {
+            return id;
+        }
+
+        public int getTimeout() {
+            return timeout;
+        }
+
+        public int getRetryCount() {
+            return retryCount;
+        }
+
+        public void incrementRetry() {
+            retryCount++;
+        }
+
+        public WeightRequest copy() {
+            WeightRequest copy = new WeightRequest(this.timeout);
+            copy.retryCount = this.retryCount + 1;
+            return copy;
+        }
+    }
+
+    private class EventTarget implements Runnable {
+
+        private final ScaleService service;
+
+        public EventTarget(ScaleService service) {
+            this.service = service;
+        }
+
+        public void run() {
+            service.eventProc();
+        }
+    }
+
+    private class PollTarget implements Runnable {
+
+        private final ScaleService service;
+
+        public PollTarget(ScaleService service) {
+            this.service = service;
+        }
+
+        public void run() {
+            service.pollProc();
+        }
+    }
+
+    private class WeightTarget implements Runnable {
+
+        private final ScaleService service;
+
+        public WeightTarget(ScaleService service) {
+            this.service = service;
+        }
+
+        public void run() {
+            service.weightProc();
+        }
+    }
+
+    // ======================== УПРАВЛЕНИЕ СОСТОЯНИЕМ ========================
+    private void setState(int newState) {
+        if (this.state != newState) {
+            logger.debug("State changing from " + JposUtils.getStateText(this.state)
+                    + " to " + JposUtils.getStateText(newState));
+            this.state = newState;
+        }
+    }
+
+    private void checkOpened() throws JposException {
+        if (state == JPOS_S_CLOSED) {
+            logger.debug("checkOpened() JPOS_E_CLOSED");
+            throw new JposException(JPOS_E_CLOSED, "Device is closed");
+        }
+    }
+
+    private void checkClaimed() throws JposException {
+        if (!claimed) {
+            logger.debug("checkClaimed() JPOS_E_NOTCLAIMED");
+            throw new JposException(JPOS_E_NOTCLAIMED, "Device not claimed");
+        }
+    }
+
+    private void checkEnabled() throws JposException {
+        if (!deviceEnabled) {
+            logger.debug("checkEnabled() JPOS_E_DISABLED");
+            throw new JposException(JPOS_E_DISABLED, "Device not enabled");
+        }
+    }
+
+    private void checkDisabled() throws JposException {
+        if (deviceEnabled) {
+            logger.debug("checkDisabled() JPOS_E_ILLEGAL");
+            throw new JposException(JPOS_E_ILLEGAL, "Device must be disabled for this operation");
+        }
+    }
+
+    // ======================== CAPABILITY СВОЙСТВА ========================
+    @Override
+    public boolean getCapCompareFirmwareVersion() throws JposException {
+        logger.debug("getCapCompareFirmwareVersion");
+        checkOpened();
+        boolean result = false;
+        logger.debug("getCapCompareFirmwareVersion: " + result);
         return result;
     }
 
-    // === Новые capability для версии 1.14 (все false, так как не реализованы) ===
-    public boolean getCapFreezeValue() throws JposException {
-        logger.debug("getCapFreezeValue()");
+    @Override
+    public boolean getCapStatusUpdate() throws JposException {
+        logger.debug("getCapStatusUpdate");
         checkOpened();
-        return false;
+        boolean result = true;
+        logger.debug("getCapStatusUpdate: " + result);
+        return result;
     }
 
-    public boolean getCapReadLiveWeightWithTare() throws JposException {
-        logger.debug("getCapReadLiveWeightWithTare()");
+    @Override
+    public boolean getCapUpdateFirmware() throws JposException {
+        logger.debug("getCapUpdateFirmware");
         checkOpened();
-        return false;
+        boolean result = false;
+        logger.debug("getCapUpdateFirmware: " + result);
+        return result;
     }
 
-    public boolean getCapSetPriceCalculationMode() throws JposException {
-        logger.debug("getCapSetPriceCalculationMode()");
+    @Override
+    public boolean getCapDisplay() throws JposException {
+        logger.debug("getCapDisplay");
         checkOpened();
-        return false;
+        boolean result = false;
+        logger.debug("getCapDisplay: " + result);
+        return result;
     }
 
-    public boolean getCapSetUnitPriceWithWeightUnit() throws JposException {
-        logger.debug("getCapSetUnitPriceWithWeightUnit()");
+    @Override
+    public boolean getCapStatisticsReporting() throws JposException {
+        logger.debug("getCapStatisticsReporting");
         checkOpened();
-        return false;
+        boolean result = false;
+        logger.debug("getCapStatisticsReporting: " + result);
+        return result;
     }
 
-    public boolean getCapSpecialTare() throws JposException {
-        logger.debug("getCapSpecialTare()");
+    @Override
+    public boolean getCapUpdateStatistics() throws JposException {
+        logger.debug("getCapUpdateStatistics");
         checkOpened();
-        return false;
+        boolean result = false;
+        logger.debug("getCapUpdateStatistics: " + result);
+        return result;
     }
 
-    public boolean getCapTarePriority() throws JposException {
-        logger.debug("getCapTarePriority()");
+    @Override
+    public boolean getCapDisplayText() throws JposException {
+        logger.debug("getCapDisplayText");
         checkOpened();
-        return false;
+        boolean result = false;
+        logger.debug("getCapDisplayText: " + result);
+        return result;
     }
 
+    @Override
+    public int getCapPowerReporting() throws JposException {
+        logger.debug("getCapPowerReporting");
+        checkOpened();
+        int result = JPOS_PR_STANDARD;
+        logger.debug("getCapPowerReporting: " + result);
+        return result;
+    }
+
+    @Override
+    public boolean getCapPriceCalculating() throws JposException {
+        logger.debug("getCapPriceCalculating");
+        checkOpened();
+        boolean result = false;
+        logger.debug("getCapPriceCalculating: " + result);
+        return result;
+    }
+
+    @Override
+    public boolean getCapTareWeight() throws JposException {
+        logger.debug("getCapTareWeight");
+        checkOpened();
+        boolean result = true;
+        logger.debug("getCapTareWeight: " + result);
+        return result;
+    }
+
+    @Override
+    public boolean getCapZeroScale() throws JposException {
+        logger.debug("getCapZeroScale");
+        checkOpened();
+        boolean result = scale != null && scale.getType() == EScale.Pos2;
+        logger.debug("getCapZeroScale: " + result);
+        return result;
+    }
+
+    // ======================== СВОЙСТВА ========================
     public int getMinimumWeight() throws JposException {
-        logger.debug("getMinimumWeight()");
+        logger.debug("getMinimumWeight");
         checkOpened();
-        // Минимальный вес зависит от режима работы, возвращаем 0 по умолчанию
-        return 0;
+        logger.debug("getMinimumWeight: " + minimumWeight);
+        return minimumWeight;
     }
 
-    public void open(String logicalName, EventCallbacks eventsCallback) throws JposException {
-        logger.debug("open(" + logicalName + ", " + eventsCallback + ")");
-        if (state > S_OPENED) {
-            logger.warn("state > S_OPENED");
-            // throw new JposException(JPOS_E_CLAIMED);
+    @Override
+    public int getMaximumWeight() throws JposException {
+        logger.debug("getMaximumWeight");
+        checkOpened();
+        logger.debug("getMaximumWeight: " + maximumWeight);
+        return maximumWeight;
+    }
+
+    @Override
+    public int getWeightUnit() throws JposException {
+        logger.debug("getWeightUnit");
+        checkOpened();
+        logger.debug("getWeightUnit: " + weightUnit);
+        return weightUnit;
+    }
+
+    @Override
+    public int getScaleLiveWeight() throws JposException {
+        logger.debug("getScaleLiveWeight");
+        checkEnabled();
+        logger.debug("getScaleLiveWeight: " + scaleLiveWeight);
+        return (int) scaleLiveWeight;
+    }
+
+    @Override
+    public int getStatusNotify() throws JposException {
+        logger.debug("getStatusNotify");
+        checkOpened();
+        logger.debug("getStatusNotify: " + statusNotify);
+        return statusNotify;
+    }
+
+    @Override
+    public void setStatusNotify(int statusNotify) throws JposException {
+        logger.debug("setStatusNotify(" + statusNotify + ")");
+        checkDisabled();
+        this.statusNotify = statusNotify;
+        logger.debug("setStatusNotify: OK");
+    }
+
+    @Override
+    public boolean getAsyncMode() throws JposException {
+        logger.debug("getAsyncMode");
+        checkOpened();
+        logger.debug("getAsyncMode: " + asyncMode);
+        return asyncMode;
+    }
+
+    @Override
+    public void setAsyncMode(boolean async) throws JposException {
+        logger.debug("setAsyncMode(" + async + ")");
+        checkOpened();
+
+        if (async == this.asyncMode) {
+            logger.debug("setAsyncMode: no change");
             return;
         }
 
-        state = S_CLOSED;
+        this.asyncMode = async;
+        if (this.asyncMode) {
+            startWeightThread();
+        } else {
+            stopWeightThread();
+            if (state == JPOS_S_BUSY) {
+                setState(JPOS_S_IDLE);
+            }
+        }
+        logger.debug("setAsyncMode: OK");
+    }
+
+    @Override
+    public int getDataCount() throws JposException {
+        logger.debug("getDataCount");
+        checkOpened();
+        int count = eventQueue.size();
+        logger.debug("getDataCount: " + count);
+        return count;
+    }
+
+    @Override
+    public int getMaxDisplayTextChars() throws JposException {
+        logger.debug("getMaxDisplayTextChars");
+        checkOpened();
+        logger.debug("getMaxDisplayTextChars: 0");
+        return 0;
+    }
+
+    @Override
+    public int getPowerNotify() throws JposException {
+        logger.debug("getPowerNotify");
+        checkOpened();
+        logger.debug("getPowerNotify: " + powerNotify);
+        return powerNotify;
+    }
+
+    @Override
+    public void setPowerNotify(int powerNotify) throws JposException {
+        logger.debug("setPowerNotify(" + powerNotify + ")");
+        checkDisabled();
+        this.powerNotify = powerNotify;
+        logger.debug("setPowerNotify: OK");
+    }
+
+    @Override
+    public int getPowerState() throws JposException {
+        logger.debug("getPowerState");
+        checkOpened();
+        logger.debug("getPowerState: " + powerState);
+        return powerState;
+    }
+
+    @Override
+    public long getSalesPrice() throws JposException {
+        logger.debug("getSalesPrice");
+        checkEnabled();
+        logger.debug("getSalesPrice: " + salesPrice);
+        return salesPrice;
+    }
+
+    @Override
+    public int getTareWeight() throws JposException {
+        logger.debug("getTareWeight");
+        checkEnabled();
+        logger.debug("getTareWeight: " + tareWeight);
+        return tareWeight;
+    }
+
+    @Override
+    public void setTareWeight(int tareWeight) throws JposException {
+        logger.debug("setTareWeight(" + tareWeight + ")");
+        checkEnabled();
+
+        if (!getCapTareWeight()) {
+            JposException e = new JposException(JPOS_E_ILLEGAL, "Tare weight not supported");
+            logger.error("setTareWeight: " + e.getMessage());
+            throw e;
+        }
+
+        try {
+            this.tareWeight = tareWeight;
+            scale.tara((long) tareWeight);
+            logger.debug("setTareWeight: OK");
+        } catch (Exception e) {
+            JposException je = getJposException(e);
+            logger.error("setTareWeight error: " + e.getMessage());
+            throw je;
+        }
+    }
+
+    @Override
+    public long getUnitPrice() throws JposException {
+        logger.debug("getUnitPrice");
+        checkEnabled();
+        logger.debug("getUnitPrice: " + unitPrice);
+        return unitPrice;
+    }
+
+    @Override
+    public void setUnitPrice(long unitPrice) throws JposException {
+        logger.debug("setUnitPrice(" + unitPrice + ")");
+        JposException e = new JposException(JPOS_E_ILLEGAL, "Not supported");
+        logger.error("setUnitPrice: " + e.getMessage());
+        throw e;
+    }
+
+    @Override
+    public boolean getAutoDisable() throws JposException {
+        logger.debug("getAutoDisable");
+        checkOpened();
+        logger.debug("getAutoDisable: " + autoDisable);
+        return autoDisable;
+    }
+
+    @Override
+    public void setAutoDisable(boolean autoDisable) throws JposException {
+        logger.debug("setAutoDisable(" + autoDisable + ")");
+        checkOpened();
+        this.autoDisable = autoDisable;
+        logger.debug("setAutoDisable: OK");
+    }
+
+    @Override
+    public boolean getZeroValid() throws JposException {
+        logger.debug("getZeroValid");
+        checkOpened();
+        logger.debug("getZeroValid: " + zeroValid);
+        return zeroValid;
+    }
+
+    @Override
+    public void setZeroValid(boolean zeroValid) throws JposException {
+        logger.debug("setZeroValid(" + zeroValid + ")");
+        checkOpened();
+        this.zeroValid = zeroValid;
+        logger.debug("setZeroValid: OK");
+    }
+
+    @Override
+    public boolean getDataEventEnabled() throws JposException {
+        logger.debug("getDataEventEnabled");
+        checkOpened();
+        logger.debug("getDataEventEnabled: " + dataEventEnabled);
+        return dataEventEnabled;
+    }
+
+    @Override
+    public void setDataEventEnabled(boolean enabled) throws JposException {
+        logger.debug("setDataEventEnabled(" + enabled + ")");
+        checkOpened();
+        synchronized (this) {
+            dataEventEnabled = enabled;
+        }
+        logger.debug("setDataEventEnabled: OK");
+    }
+
+    @Override
+    public boolean getFreezeEvents() throws JposException {
+        logger.debug("getFreezeEvents");
+        checkOpened();
+        logger.debug("getFreezeEvents: " + freezeEvents);
+        return freezeEvents;
+    }
+
+    @Override
+    public void setFreezeEvents(boolean freezeEvents) throws JposException {
+        logger.debug("setFreezeEvents(" + freezeEvents + ")");
+        checkOpened();
+
+        synchronized (this) {
+            this.freezeEvents = freezeEvents;
+        }
+
+        logger.debug("setFreezeEvents: OK");
+    }
+
+    @Override
+    public boolean getClaimed() throws JposException {
+        logger.debug("getClaimed");
+        checkOpened();
+        logger.debug("getClaimed: " + claimed);
+        return claimed;
+    }
+
+    @Override
+    public boolean getDeviceEnabled() throws JposException {
+        logger.debug("getDeviceEnabled");
+        checkOpened();
+        logger.debug("getDeviceEnabled: " + deviceEnabled);
+        return deviceEnabled;
+    }
+
+    @Override
+    public int getState() throws JposException {
+        logger.debug("getState");
+        logger.debug("getState: " + JposUtils.getStateText(state));
+        return state;
+    }
+
+    // ======================== МЕТОДЫ УПРАВЛЕНИЯ ========================
+    @Override
+    public void open(String logicalName, EventCallbacks eventsCallback) throws JposException {
+        logger.debug("open(" + logicalName + ", " + eventsCallback + ")");
+
+        if (state != JPOS_S_CLOSED) {
+            logger.warn("open: state != JPOS_S_CLOSED");
+            return;
+        }
+
         this.eventsCallback = eventsCallback;
-        m_logicalName = logicalName;
-        asyncMode = false;
+        this.logicalName = logicalName;
+        this.asyncMode = false;
+        this.deviceEnabled = false;
+        this.claimed = false;
 
         StringParams params = new StringParams();
         params.set(IDevice.PARAM_PORTNAME, "");
@@ -251,7 +598,6 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         String protocol = "pos2";
 
         try {
-
             if (m_jposEntry != null) {
                 JposPropertyReader reader = new JposPropertyReader(m_jposEntry);
                 protocol = reader.readString("protocol").toLowerCase();
@@ -274,14 +620,822 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
             scale = createProtocol(protocol);
             scale.setParams(params);
-            state = S_OPENED;
+            setState(JPOS_S_IDLE);
             logger.debug("open: OK");
+
         } catch (Exception e) {
+            JposException je = getJposException(e);
+            logger.error("open error: " + e.getMessage());
+            throw je;
+        }
+    }
+
+    @Override
+    public void close() throws JposException {
+        logger.debug("close()");
+
+        try {
+            if (getDeviceEnabled()) {
+                setDeviceEnabled(false);
+            }
+            if (claimed) {
+                release();
+            }
+
+            stopAllThreads();
+
+            asyncMode = false;
+            setState(JPOS_S_CLOSED);
+            scale = null;
+            currentWeight = null;
+
+            requestQueue.clear();
+            eventQueue.clear();
+
+            logger.debug("close: OK");
+        } catch (Exception e) {
+            JposException je = getJposException(e);
+            logger.error("close error: " + e.getMessage());
+            throw je;
+        }
+    }
+
+    @Override
+    public void claim(int timeout) throws JposException {
+        logger.debug("claim(" + timeout + ")");
+        checkOpened();
+
+        if (claimed) {
+            logger.debug("claim: already claimed");
+            return;
+        }
+
+        try {
+            scale.connect();
+            deviceMetrics = scale.getDeviceMetrics();
+
+            //maximumWeight = (int) deviceMetrics.getMaximumWeight();
+            //minimumWeight = (int) deviceMetrics.getMinimumWeight();
+            //weightUnit = mapWeightUnit(deviceMetrics.getWeightUnit());
+            claimed = true;
+            logger.debug(deviceMetrics.toString());
+            logger.debug("claim: OK");
+
+        } catch (Exception e) {
+            JposException je = getJposException(e);
+            logger.error("claim error: " + e.getMessage());
+            throw je;
+        }
+    }
+
+    private int mapWeightUnit(String unit) {
+        if ("kg".equalsIgnoreCase(unit)) {
+            return SCAL_WU_KILOGRAM;
+        }
+        if ("g".equalsIgnoreCase(unit)) {
+            return SCAL_WU_GRAM;
+        }
+        if ("lb".equalsIgnoreCase(unit)) {
+            return SCAL_WU_POUND;
+        }
+        if ("oz".equalsIgnoreCase(unit)) {
+            return SCAL_WU_OUNCE;
+        }
+        return SCAL_WU_GRAM;
+    }
+
+    @Override
+    public void release() throws JposException {
+        logger.debug("release()");
+        checkOpened();
+
+        if (!claimed) {
+            logger.debug("release: not claimed");
+            return;
+        }
+
+        try {
+            scale.disconnect();
+            claimed = false;
+            setState(JPOS_S_IDLE);
+            logger.debug("release: OK");
+        } catch (Exception e) {
+            JposException je = getJposException(e);
+            logger.error("release error: " + e.getMessage());
+            throw je;
+        }
+    }
+
+    @Override
+    public void setDeviceEnabled(boolean enabled) throws JposException {
+        logger.debug("setDeviceEnabled(" + enabled + ")");
+        checkClaimed();
+
+        try {
+            if (enabled) {
+                tareWeight = 0;
+                unitPrice = 0;
+                salesPrice = 0;
+
+                deviceEnabled = true;
+                setState(JPOS_S_IDLE);
+                readScaleWeight();
+                setPowerState(JPOS_PS_ONLINE);
+
+                startPollThread();
+                startEventThread();
+                logger.debug("setDeviceEnabled: device enabled");
+
+            } else {
+                deviceEnabled = false;
+                setState(JPOS_S_IDLE);
+                setPowerState(JPOS_PS_UNKNOWN);
+
+                if (asyncMode) {
+                    setAsyncMode(false);
+                }
+
+                stopPollThread();
+                requestQueue.clear();
+                stopEventThread();
+                logger.debug("setDeviceEnabled: device disabled");
+            }
+            logger.debug("setDeviceEnabled: OK");
+        } catch (Exception e) {
+            JposException je = getJposException(e);
+            logger.error("setDeviceEnabled error: " + e.getMessage());
+            throw je;
+        }
+    }
+
+    @Override
+    public void deleteInstance() throws JposException {
+        logger.debug("deleteInstance()");
+    }
+
+    // ======================== МЕТОДЫ ВВОДА/ВЫВОДА ========================
+    @Override
+    public void clearInput() throws JposException {
+        logger.debug("clearInput()");
+        checkOpened();
+
+        eventQueue.clear();
+        requestQueue.clear();
+        currentRequest = null;
+        setState(JPOS_S_IDLE);
+
+        logger.debug("clearInput: OK");
+    }
+
+    public void clearInputProperties() throws JposException {
+        logger.debug("clearInputProperties()");
+        checkOpened();
+
+        scaleLiveWeight = 0;
+        currentWeight = null;
+        salesPrice = 0;
+
+        logger.debug("clearInputProperties: OK");
+    }
+
+    public void clearOutput() throws JposException {
+        logger.debug("clearOutput()");
+        logger.debug("clearOutput: OK");
+    }
+
+    @Override
+    public void readWeight(int[] weightData, int timeout) throws JposException {
+        logger.debug("readWeight(" + weightData + ", " + timeout + ")");
+        checkEnabled();
+
+        if (state == JPOS_S_ERROR) {
+            JposException e = new JposException(JPOS_E_FAILURE, "Device in error state. Call clearInput()");
+            logger.error("readWeight: " + e.getMessage());
+            throw e;
+        }
+
+        try {
+            if (asyncMode) {
+                // Атомарная проверка и установка состояния
+                synchronized (this) {
+                    if (state == JPOS_S_BUSY) {
+                        JposException e = new JposException(JPOS_E_BUSY, "Asynchronous operation already in progress");
+                        logger.error("readWeight: " + e.getMessage());
+                        throw e;
+                    }
+                    setState(JPOS_S_BUSY);
+                }
+                requestQueue.offer(new WeightRequest(timeout));
+                logger.debug("readWeight: async request queued");
+
+            } else {
+                long weight = readWeightSync(timeout);
+                if (weightData != null && weightData.length > 0) {
+                    weightData[0] = (int) weight;
+                }
+                logger.debug("readWeight: OK, weight=" + weight);
+            }
+        } catch (JposException e) {
+            logger.error("readWeight error: " + e.getMessage());
+            throw e;
+        } catch (Exception e) {
+            JposException je = getJposException(e);
+            logger.error("readWeight error: " + e.getMessage());
+            throw je;
+        }
+    }
+
+    @Override
+    public void zeroScale() throws JposException {
+        logger.debug("zeroScale()");
+        checkEnabled();
+
+        if (!getCapZeroScale()) {
+            JposException e = new JposException(JPOS_E_ILLEGAL, "Zero scale not supported");
+            logger.error("zeroScale: " + e.getMessage());
+            throw e;
+        }
+
+        try {
+            scale.zero();
+            logger.debug("zeroScale: OK");
+        } catch (Exception e) {
+            JposException je = getJposException(e);
+            logger.error("zeroScale error: " + e.getMessage());
+            throw je;
+        }
+    }
+
+    // ======================== НЕПОДДЕРЖИВАЕМЫЕ МЕТОДЫ ========================
+    @Override
+    public void displayText(String text) throws JposException {
+        logger.debug("displayText(" + text + ")");
+        JposException e = new JposException(JPOS_E_ILLEGAL, "Not supported");
+        logger.error("displayText: " + e.getMessage());
+        throw e;
+    }
+
+    @Override
+    public void checkHealth(int level) throws JposException {
+        logger.debug("checkHealth(" + level + ")");
+        JposException e = new JposException(JPOS_E_ILLEGAL, "Not supported");
+        logger.error("checkHealth: " + e.getMessage());
+        throw e;
+    }
+
+    @Override
+    public void directIO(int command, int[] data, Object obj) throws JposException {
+        logger.debug("directIO(" + command + ", " + data + ", " + obj + ")");
+        JposException e = new JposException(JPOS_E_ILLEGAL, "Not supported");
+        logger.error("directIO: " + e.getMessage());
+        throw e;
+    }
+
+    @Override
+    public String getCheckHealthText() throws JposException {
+        logger.debug("getCheckHealthText()");
+        logger.debug("getCheckHealthText: ");
+        return "";
+    }
+
+    @Override
+    public void compareFirmwareVersion(String firmwareFileName, int[] result) throws JposException {
+        logger.debug("compareFirmwareVersion(" + firmwareFileName + ", " + result + ")");
+        JposException e = new JposException(JPOS_E_ILLEGAL, "Not supported");
+        logger.error("compareFirmwareVersion: " + e.getMessage());
+        throw e;
+    }
+
+    @Override
+    public void updateFirmware(String firmwareFileName) throws JposException {
+        logger.debug("updateFirmware(" + firmwareFileName + ")");
+        JposException e = new JposException(JPOS_E_ILLEGAL, "Not supported");
+        logger.error("updateFirmware: " + e.getMessage());
+        throw e;
+    }
+
+    @Override
+    public void resetStatistics(String statisticsBuffer) throws JposException {
+        logger.debug("resetStatistics(" + statisticsBuffer + ")");
+        JposException e = new JposException(JPOS_E_ILLEGAL, "Not supported");
+        logger.error("resetStatistics: " + e.getMessage());
+        throw e;
+    }
+
+    @Override
+    public void retrieveStatistics(String[] statisticsBuffer) throws JposException {
+        logger.debug("retrieveStatistics(" + statisticsBuffer + ")");
+        JposException e = new JposException(JPOS_E_ILLEGAL, "Not supported");
+        logger.error("retrieveStatistics: " + e.getMessage());
+        throw e;
+    }
+
+    @Override
+    public void updateStatistics(String statisticsBuffer) throws JposException {
+        logger.debug("updateStatistics(" + statisticsBuffer + ")");
+        JposException e = new JposException(JPOS_E_ILLEGAL, "Not supported");
+        logger.error("updateStatistics: " + e.getMessage());
+        throw e;
+    }
+
+    // ======================== ИНФОРМАЦИОННЫЕ МЕТОДЫ ========================
+    @Override
+    public String getDeviceServiceDescription() throws JposException {
+        logger.debug("getDeviceServiceDescription()");
+        String result = "Scale Service v1.13";
+        logger.debug("getDeviceServiceDescription: " + result);
+        return result;
+    }
+
+    @Override
+    public int getDeviceServiceVersion() throws JposException {
+        int version = 1013000 + ServiceVersionUtil.getVersionInt();
+        logger.debug("getDeviceServiceVersion()");
+        logger.debug("getDeviceServiceVersion: " + version);
+        return version;
+    }
+
+    @Override
+    public String getPhysicalDeviceDescription() throws JposException {
+        logger.debug("getPhysicalDeviceDescription()");
+        checkOpened();
+
+        String result;
+        if (scale == null) {
+            result = "Unknown Scale";
+        } else {
+            switch (scale.getType()) {
+                case Pos2:
+                    result = "SHTRIKH-M POS2 Scale";
+                    break;
+                case Shtrih5:
+                    result = "SHTRIKH-M SHTRIH5 Scale";
+                    break;
+                case Shtrih6:
+                    result = "SHTRIKH-M SHTRIH6 Scale";
+                    break;
+                default:
+                    result = "SHTRIKH-M Scale";
+            }
+        }
+        logger.debug("getPhysicalDeviceDescription: " + result);
+        return result;
+    }
+
+    @Override
+    public String getPhysicalDeviceName() throws JposException {
+        logger.debug("getPhysicalDeviceName()");
+        String result = getPhysicalDeviceDescription();
+        logger.debug("getPhysicalDeviceName: " + result);
+        return result;
+    }
+
+    // ======================== СИНХРОННОЕ ЧТЕНИЕ ВЕСА ========================
+    private long readWeightSync(int timeout) throws JposException, InterruptedException {
+        long startTime = System.currentTimeMillis();
+
+        while (!Thread.currentThread().isInterrupted()) {
+            ScaleWeight weight = readScaleWeight();
+
+            if (weight == null) {
+                continue;
+            }
+
+            checkWeightErrors(weight);
+
+            if (weight.status.isStable()) {
+                if (weight.weight == 0) {
+                    if (zeroValid) {
+                        return weight.weight;
+                    }
+                } else {
+                    return weight.weight;
+                }
+            }
+
+            if (timeout == 0) {
+                return weight.weight;
+            }
+
+            if (System.currentTimeMillis() > startTime + timeout) {
+                throw new JposException(JPOS_E_TIMEOUT, "Timeout waiting for stable weight");
+            }
+
+            Thread.sleep(10);
+        }
+
+        throw new InterruptedException("Thread interrupted while reading weight");
+    }
+
+    private long readWeightAsync(int timeout) throws JposException, InterruptedException {
+        long startTime = System.currentTimeMillis();
+
+        while (!Thread.currentThread().isInterrupted()) {
+            ScaleWeight weight = readScaleWeight();
+
+            if (weight == null) {
+                continue;
+            }
+
+            checkWeightErrors(weight);
+
+            if (weight.status.isStable()) {
+                if (weight.weight == 0 && !zeroValid) {
+                    // Пропускаем
+                } else {
+                    return weight.weight;
+                }
+            }
+
+            if (System.currentTimeMillis() > startTime + timeout) {
+                return weight.weight;
+            }
+
+            Thread.sleep(10);
+        }
+
+        throw new InterruptedException("Thread interrupted while reading weight");
+    }
+
+    private void checkWeightErrors(ScaleWeight weight) throws JposException {
+        if (weight.status.isOverweight()) {
+            throw new JposException(JPOS_E_EXTENDED,
+                    ScaleConst.JPOS_ESCAL_OVERWEIGHT,
+                    "Weight exceeds maximum");
+        }
+
+        if (weight.weight < 0) {
+            throw new JposException(JPOS_E_EXTENDED,
+                    ScaleConst.JPOS_ESCAL_UNDER_ZERO,
+                    "Weight below zero");
+        }
+
+    }
+
+    // ======================== УПРАВЛЕНИЕ ПОТОКАМИ ========================
+    private void startPollThread() {
+        if (pollEnabled) {
+            stopPollThread();
+            pollThread = new Thread(new PollTarget(this), "ScalePollThread");
+            pollThread.setDaemon(true);
+            pollThread.start();
+            logger.debug("Poll thread started");
+        }
+    }
+
+    private void stopPollThread() {
+        if (pollThread != null) {
+            pollThread.interrupt();
+            try {
+                pollThread.join(THREAD_STOP_TIMEOUT_MS);
+            } catch (InterruptedException e) {
+                logger.error("Error stopping pollThread", e);
+                Thread.currentThread().interrupt();
+            }
+            pollThread = null;
+            logger.debug("Poll thread stopped");
+        }
+    }
+
+    private void startEventThread() {
+        stopEventThread();
+        eventThread = new Thread(new EventTarget(this), "ScaleEventThread");
+        eventThread.setDaemon(true);
+        eventThread.start();
+        logger.debug("Event thread started");
+    }
+
+    private void stopEventThread() {
+        if (eventThread != null) {
+            eventThread.interrupt();
+            try {
+                eventThread.join(THREAD_STOP_TIMEOUT_MS);
+            } catch (InterruptedException e) {
+                logger.error("Error stopping eventThread", e);
+                Thread.currentThread().interrupt();
+            }
+            eventThread = null;
+            logger.debug("Event thread stopped");
+        }
+    }
+
+    private void startWeightThread() {
+        stopWeightThread();
+        weightThread = new Thread(new WeightTarget(this), "ScaleWeightThread");
+        weightThread.setDaemon(true);
+        weightThread.start();
+        logger.debug("Weight thread started");
+    }
+
+    private void stopWeightThread() {
+        if (weightThread != null) {
+            weightThread.interrupt();
+            try {
+                weightThread.join(THREAD_STOP_TIMEOUT_MS);
+            } catch (InterruptedException e) {
+                logger.error("Error stopping weightThread", e);
+                Thread.currentThread().interrupt();
+            }
+            weightThread = null;
+            logger.debug("Weight thread stopped");
+        }
+    }
+
+    private void stopAllThreads() {
+        stopPollThread();
+        stopEventThread();
+        stopWeightThread();
+    }
+
+    // ======================== ОСНОВНЫЕ ПРОЦЕДУРЫ ПОТОКОВ ========================
+    public void pollProc() {
+        logger.debug("Poll thread started");
+        try {
+            while (!Thread.interrupted() && deviceEnabled) {
+                readScaleWeight();
+                Thread.sleep(POLL_INTERVAL_MS);
+            }
+        } catch (InterruptedException e) {
+            logger.debug("Poll thread interrupted");
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            logger.error("Poll thread error", e);
+        } finally {
+            logger.debug("Poll thread stopped");
+        }
+    }
+
+    public void eventProc() {
+        logger.debug("Event thread started");
+        try {
+            while (!Thread.interrupted() && deviceEnabled) {
+                JposEvent event = eventQueue.poll(100, TimeUnit.MILLISECONDS);
+                if (event == null) {
+                    continue;
+                }
+
+                boolean canDeliver;
+
+                if (event instanceof DataEvent) {
+                    synchronized (this) {
+                        canDeliver = dataEventEnabled && !freezeEvents;
+                    }
+                } else {
+                    canDeliver = !freezeEvents;
+                }
+
+                if (canDeliver) {
+                    fireJposEvent(event);
+
+                    // Обработка ER_RETRY
+                    if (event instanceof ErrorEvent) {
+                        handleErrorResponse((ErrorEvent) event);
+                    }
+
+                    if (event instanceof DataEvent && autoDisable) {
+                        handleAutoDisable();
+                    }
+
+                } else {
+                    eventQueue.offer(event);
+                    Thread.sleep(10);
+                }
+            }
+        } catch (InterruptedException e) {
+            logger.debug("Event thread interrupted");
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            logger.error("Event thread error", e);
+        } finally {
+            logger.debug("Event thread stopped");
+        }
+    }
+
+    private void handleErrorResponse(ErrorEvent errorEvent) {
+        int response = errorEvent.getErrorResponse();
+        logger.debug("handleErrorResponse: response=" + response);
+
+        if (response == JPOS_ER_RETRY) {
+            logger.debug("ER_RETRY received");
+
+            if (currentRequest != null && currentRequest.getRetryCount() < MAX_RETRY_COUNT) {
+                WeightRequest retryRequest = currentRequest.copy();
+                logger.debug("Retry #" + retryRequest.getRetryCount() + "/" + MAX_RETRY_COUNT
+                        + " for request #" + currentRequest.getId());
+
+                requestQueue.offer(retryRequest);
+                setState(JPOS_S_BUSY);
+            } else {
+                logger.debug("Max retries exceeded or no current request");
+                setState(JPOS_S_IDLE);
+                currentRequest = null;
+            }
+        } else if (response == JPOS_ER_CLEAR) {
+            logger.debug("ER_CLEAR received");
+            setState(JPOS_S_IDLE);
+            currentRequest = null;
+        }
+    }
+
+    public void weightProc() {
+        logger.debug("Weight thread started");
+        try {
+            while (!Thread.interrupted() && deviceEnabled && asyncMode) {
+                try {
+                    WeightRequest request = requestQueue.take();
+                    currentRequest = request;
+                    logger.debug("Processing request #" + request.getId()
+                            + ", timeout=" + request.getTimeout()
+                            + ", retry=" + request.getRetryCount());
+
+                    processWeightRequest(request);
+                } catch (InterruptedException e) {
+                    logger.debug("Weight thread interrupted");
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception e) {
+                    logger.error("Error processing weight request", e);
+                }
+            }
+        } finally {
+            currentRequest = null;
+            logger.debug("Weight thread stopped");
+        }
+    }
+
+    private void processWeightRequest(WeightRequest request) {
+        try {
+            long weight = readWeightAsync(request.getTimeout());
+            DataEvent dataEvent = new DataEvent(this, (int) weight);
+            addEvent(dataEvent);
+            setState(JPOS_S_IDLE);
+            currentRequest = null;
+            logger.debug("Weight request processed, weight=" + weight);
+
+        } catch (JposException e) {
+            handleWeightError(e, request);
+        } catch (InterruptedException e) {
+            logger.debug("Weight request interrupted");
+            Thread.currentThread().interrupt();
+            setState(JPOS_S_IDLE);
+            currentRequest = null;
+        }
+    }
+
+    private void handleWeightError(JposException e, WeightRequest request) {
+        boolean canRetry = isRetryableError(e) && request.getRetryCount() < MAX_RETRY_COUNT;
+
+        ErrorEvent errorEvent = new ErrorEvent(
+                this,
+                e.getErrorCode(),
+                e.getErrorCodeExtended(),
+                JPOS_EL_INPUT,
+                canRetry ? JPOS_ER_RETRY : JPOS_ER_CLEAR
+        );
+
+        setState(JPOS_S_ERROR);
+        addEvent(errorEvent);
+        logger.debug("Error event queued for request #" + request.getId()
+                + ", canRetry=" + canRetry
+                + ", errorCode=" + e.getErrorCode());
+    }
+
+    private boolean isRetryableError(JposException e) {
+        if (e.getErrorCode() != JPOS_E_EXTENDED) {
+            return false;
+        }
+
+        switch (e.getErrorCodeExtended()) {
+            case ScaleConst.JPOS_ESCAL_OVERWEIGHT:
+            case ScaleConst.JPOS_ESCAL_UNDER_ZERO:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // ======================== ЧТЕНИЕ ВЕСА ========================
+    private ScaleWeight readScaleWeight() throws JposException {
+        try {
+            if (scale == null) {
+                return null;
+            }
+
+            ScaleWeight weight = scale.getWeight();
+
+            if (weight == null || weight.status == null) {
+                return null;
+            }
+
+            scaleLiveWeight = weight.status.isStable() ? weight.weight : 0;
+            generateStatusEvents(weight);
+            currentWeight = weight;
+
+            return weight;
+
+        } catch (Exception e) {
+            logger.error("Error reading scale weight", e);
             throw getJposException(e);
         }
     }
 
+    private void generateStatusEvents(ScaleWeight newWeight) {
+        if (statusNotify != SCAL_SN_ENABLED) {
+            return;
+        }
+
+        ScaleWeight oldWeight = currentWeight;
+
+        if (oldWeight == null || newWeight.status.isStable() != oldWeight.status.isStable()) {
+            statusUpdateEvent(newWeight.status.isStable()
+                    ? SCAL_SUE_STABLE_WEIGHT : SCAL_SUE_WEIGHT_UNSTABLE);
+        }
+
+        if (newWeight.weight == 0 && (oldWeight == null || oldWeight.weight != 0)) {
+            statusUpdateEvent(SCAL_SUE_WEIGHT_ZERO);
+        }
+
+        if (newWeight.weight < 0 && (oldWeight == null || oldWeight.weight >= 0)) {
+            statusUpdateEvent(SCAL_SUE_WEIGHT_UNDER_ZERO);
+        }
+
+        if (newWeight.status.isOverweight()
+                && (oldWeight == null || !oldWeight.status.isOverweight())) {
+            statusUpdateEvent(SCAL_SUE_WEIGHT_OVERWEIGHT);
+        }
+    }
+
+    private void handleAutoDisable() {
+        try {
+            logger.debug("AutoDisable: disabling device after DataEvent");
+            setDeviceEnabled(false);
+        } catch (JposException e) {
+            logger.error("AutoDisable failed", e);
+        }
+    }
+
+    // ======================== УПРАВЛЕНИЕ СОБЫТИЯМИ ========================
+    private void addEvent(JposEvent event) {
+        eventQueue.offer(event);
+    }
+
+    private void fireJposEvent(JposEvent event) {
+        if (eventsCallback == null) {
+            return;
+        }
+
+        logger.debug("fireJposEvent: " + event.getClass().getSimpleName());
+
+        if (event instanceof StatusUpdateEvent) {
+            eventsCallback.fireStatusUpdateEvent((StatusUpdateEvent) event);
+        } else if (event instanceof DataEvent) {
+            eventsCallback.fireDataEvent((DataEvent) event);
+        } else if (event instanceof ErrorEvent) {
+            eventsCallback.fireErrorEvent((ErrorEvent) event);
+        } else if (event instanceof DirectIOEvent) {
+            eventsCallback.fireDirectIOEvent((DirectIOEvent) event);
+        } else if (event instanceof OutputCompleteEvent) {
+            eventsCallback.fireOutputCompleteEvent((OutputCompleteEvent) event);
+        }
+    }
+
+    private void statusUpdateEvent(int status) {
+        logger.debug("statusUpdateEvent(" + status + ")");
+
+        if (status >= SCL_SUE_STABLE_WEIGHT && status <= SCAL_SUE_WEIGHT_UNDER_ZERO) {
+            if (statusNotify == SCAL_SN_ENABLED) {
+                addEvent(new StatusUpdateEvent(this, status));
+            }
+        } else {
+            addEvent(new StatusUpdateEvent(this, status));
+        }
+    }
+
+    // ======================== УПРАВЛЕНИЕ ПИТАНИЕМ ========================
+    public void setPowerState(int newPowerState) {
+        if (powerNotify == JPOS_PN_ENABLED && newPowerState != this.powerState) {
+            switch (newPowerState) {
+                case JPOS_PS_ONLINE:
+                    statusUpdateEvent(JPOS_SUE_POWER_ONLINE);
+                    break;
+                case JPOS_PS_OFF:
+                    statusUpdateEvent(JPOS_SUE_POWER_OFF);
+                    break;
+                case JPOS_PS_OFFLINE:
+                    statusUpdateEvent(JPOS_SUE_POWER_OFFLINE);
+                    break;
+                case JPOS_PS_OFF_OFFLINE:
+                    statusUpdateEvent(JPOS_SUE_POWER_OFF_OFFLINE);
+                    break;
+            }
+        }
+        this.powerState = newPowerState;
+    }
+
+    // ======================== ФАБРИЧНЫЕ МЕТОДЫ ========================
     protected ScaleSerial createProtocol(String protocol) throws Exception {
+        logger.debug("createProtocol(" + protocol + ")");
+
         if (protocol.equalsIgnoreCase("pos2")) {
             return new Pos2Serial();
         }
@@ -291,1050 +1445,44 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         if (protocol.equalsIgnoreCase("shtrih6")) {
             return new Shtrih6Serial();
         }
-        throw new JposException(JPOS_E_FAILURE, "Неизвестный протокол весов '" + protocol + "'");
+        throw new JposException(JPOS_E_FAILURE, "Unknown scale protocol: " + protocol);
     }
 
-    public void release() throws JposException {
-        logger.debug("release()");
-        checkClaimed();
-        try {
-            scale.disconnect();
-            state = S_OPENED;
-            logger.debug("release: OK");
-        } catch (Exception e) {
-            logger.error("release: ", e);
-            throw getJposException(e);
-        }
-    }
-
-    public void claim(int timeout) throws JposException {
-        logger.debug("claim(" + String.valueOf(timeout) + ")");
-        checkOpened();
-        if (state >= S_CLAIMED) {
-            logger.warn("state >= S_CLAIMED");
-            // throw new JposException(JPOS_E_CLAIMED);
-            return;
-        }
-
-        try {
-            scale.connect();
-            deviceMetrics = scale.getDeviceMetrics();
-            logger.debug(deviceMetrics.toString());
-
-        } catch (Exception e) {
-            throw getJposException(e);
-        }
-        state = S_CLAIMED;
-        logger.debug("claim: OK");
-    }
-
-    public void close() throws JposException {
-        logger.debug("close()");
-
-        if (getDeviceEnabled()) {
-            setDeviceEnabled(false);
-        }
-        // Выключаем устройство, только если оно захвачено и включено
-        if (state >= S_CLAIMED) {
-            release();
-        }
-
-        // Сбрасываем состояние
-        asyncMode = false;
-        asyncOperationInProgress = false;
-        currentRequest = null;
-        state = S_CLOSED;
-        scale = null;
-        m_weight = null;
-
-        // Очищаем очереди
-        requests.clear();
-        eventQueue.clear();
-
-        logger.debug("close: OK");
-    }
-
-    public void compareFirmwareVersion(String arg0, int[] arg1) throws JposException {
-        logger.debug("compareFirmwareVersion(" + String.valueOf(arg0) + ", " + String.valueOf(arg1) + ")");
-
-        // Должно выбрасывать исключение, если capability false
-        if (!getCapCompareFirmwareVersion()) {
-            throw new JposException(JPOS_E_ILLEGAL, "compareFirmwareVersion не поддерживается");
-        }
-
-        logger.debug("compareFirmwareVersion: OK");
-    }
-
-    public int getScaleLiveWeight() throws JposException {
-        logger.debug("getScaleLiveWeight()");
-        logger.debug("getScaleLiveWeight = " + scaleLiveWeight);
-        return (int) scaleLiveWeight;
-    }
-
-    public int getStatusNotify() throws JposException {
-        logger.debug("getStatusNotify()");
-        logger.debug("getStatusNotify = " + statusNotify);
-        return statusNotify;
-    }
-
-    public void setStatusNotify(int statusNotify) throws JposException {
-        logger.debug("setStatusNotify(" + String.valueOf(statusNotify) + ")");
-        this.statusNotify = statusNotify;
-        logger.debug("setStatusNotify: OK");
-    }
-
-    public void updateFirmware(String arg0) throws JposException {
-        logger.debug("updateFirmware(" + String.valueOf(arg0) + ")");
-
-        // Должно выбрасывать исключение, если capability false
-        if (!getCapUpdateFirmware()) {
-            throw new JposException(JPOS_E_ILLEGAL, "updateFirmware не поддерживается");
-        }
-
-        logger.debug("updateFirmware: OK");
-    }
-
-    public void resetStatistics(String arg0) throws JposException {
-        logger.debug("resetStatistics(" + String.valueOf(arg0) + ")");
-
-        // Должно выбрасывать исключение, если capability false
-        if (!getCapStatisticsReporting() || !getCapUpdateStatistics()) {
-            throw new JposException(JPOS_E_ILLEGAL, "resetStatistics не поддерживается");
-        }
-
-        logger.debug("resetStatistics: OK");
-    }
-
-    public void retrieveStatistics(String[] arg0) throws JposException {
-        logger.debug("retrieveStatistics(" + String.valueOf(arg0) + ")");
-
-        // Должно выбрасывать исключение, если capability false
-        if (!getCapStatisticsReporting()) {
-            throw new JposException(JPOS_E_ILLEGAL, "retrieveStatistics не поддерживается");
-        }
-
-        // В реальной реализации здесь нужно заполнить arg0[0] XML со статистикой
-        // Для примера возвращаем пустой XML
-        if (arg0 != null && arg0.length > 0) {
-            arg0[0] = "<?xml version=\"1.0\"?><UPOSStat></UPOSStat>";
-        }
-
-        logger.debug("retrieveStatistics: OK");
-    }
-
-    public void updateStatistics(String arg0) throws JposException {
-        logger.debug("updateStatistics(" + String.valueOf(arg0) + ")");
-
-        // Должно выбрасывать исключение, если capability false
-        if (!getCapStatisticsReporting() || !getCapUpdateStatistics()) {
-            throw new JposException(JPOS_E_ILLEGAL, "updateStatistics не поддерживается");
-        }
-
-        logger.debug("updateStatistics: OK");
-    }
-
-    public void clearInput() throws JposException {
-        logger.debug("clearInput()");
-
-        // Очищаем очередь событий
-        eventQueue.clear();
-        // Очищаем очередь запросов
-        requests.clear();
-        // Сбрасываем текущий запрос
-        currentRequest = null;
-        // Сбрасываем флаг операции
-        asyncOperationInProgress = false;
-        // Сбрасываем состояние ошибки, если оно было
-        if (state == S_ERROR) {
-            state = getDeviceEnabled() ? S_ENABLED : S_CLAIMED;
-        }
-
-        logger.debug("clearInput: OK");
-    }
-
-    public void displayText(String arg0) throws JposException {
-        logger.debug("displayText(" + arg0 + ")");
-        logger.debug("displayText: OK");
-    }
-
-    public void setAsyncMode(boolean async) throws JposException {
-        logger.debug("setAsyncMode(" + String.valueOf(async) + ")");
-
-        checkOpened();
-        if (async == this.asyncMode) {
-            return;
-        }
-
-        this.asyncMode = async;
-        if (this.asyncMode) {
-            weightThread = new Thread(new WeightTarget(this));
-            weightThread.setName("ScaleWeightThread");
-            weightThread.start();
-        } else {
-            // Сбрасываем флаг операции при выходе из асинхронного режима
-            asyncOperationInProgress = false;
-            currentRequest = null;
-            if (weightThread != null) {
-                weightThread.interrupt();
-                try {
-                    weightThread.join(1000);
-                } catch (InterruptedException e) {
-                    logger.error(e.getMessage());
-                    Thread.currentThread().interrupt();
-                }
-                weightThread = null;
-            }
-        }
-        logger.debug("setAsyncMode: OK");
-    }
-
-    public boolean getAsyncMode() throws JposException {
-        logger.debug("getAsyncMode()");
-        logger.debug("getAsyncMode = " + String.valueOf(asyncMode));
-        return asyncMode;
-    }
-
-    public int getDataCount() throws JposException {
-        logger.debug("getDataCount()");
-        int count = eventQueue.size();
-        logger.debug("getDataCount = " + count);
-        return count;
-    }
-
-    public int getMaxDisplayTextChars() throws JposException {
-        logger.debug("getMaxDisplayTextChars()");
-        checkOpened();
-        logger.debug("getMaxDisplayTextChars = 0");
-        return 0;
-    }
-
-    public int getPowerNotify() throws JposException {
-        logger.debug("getPowerNotify()");
-        checkOpened();
-        logger.debug("getPowerNotify = " + powerNotify);
-        return powerNotify;
-    }
-
-    public int getPowerState() throws JposException {
-        logger.debug("getPowerState()");
-        checkOpened();
-        logger.debug("getPowerState = JPOS_PS_UNKNOWN");
-        return powerState;
-    }
-
-    public long getSalesPrice() throws JposException {
-        logger.debug("getSalesPrice()");
-        checkOpened();
-        logger.debug("getSalesPrice = 0");
-        return 0;
-    }
-
-    public int getTareWeight() throws JposException {
-        logger.debug("getTareWeight()");
-        checkOpened();
-        logger.debug("getTareWeight = " + String.valueOf(tareWeight));
-        return tareWeight;
-    }
-
-    public long getUnitPrice() throws JposException {
-        logger.debug("getUnitPrice()");
-        checkOpened();
-        logger.debug("getUnitPrice = 0");
-        return 0;
-    }
-
-    public boolean getAutoDisable() throws JposException {
-        logger.debug("getAutoDisable()");
-        logger.debug("getAutoDisable = " + String.valueOf(autoDisable));
-        return autoDisable;
-    }
-
-    public void setAutoDisable(boolean autoDisable) throws JposException {
-        logger.debug("setAutoDisable(" + String.valueOf(autoDisable) + ")");
-        this.autoDisable = autoDisable;
-        logger.debug("setAutoDisable: OK");
-    }
-
-    public void setDataEventEnabled(boolean enabled) throws JposException {
-        logger.debug("setDataEventEnabled(" + String.valueOf(enabled) + ")");
-        synchronized (this) {
-            dataEventEnabled = enabled;
-            // Пробуждаем поток обработки событий для проверки
-            if (eventThread != null) {
-                eventThread.interrupt(); // Прерываем сон, чтобы сразу проверить новые события
-            }
-        }
-        logger.debug("setDataEventEnabled: OK");
-    }
-
-    public boolean getDataEventEnabled() throws JposException {
-        logger.debug("getDataEventEnabled()");
-        logger.debug("getDataEventEnabled = " + dataEventEnabled);
-        return dataEventEnabled;
-    }
-
-    public void setPowerNotify(int powerNotify) throws JposException {
-        logger.debug("setPowerNotify(" + powerNotify + ")");
-        this.powerNotify = powerNotify;
-        logger.debug("setPowerNotify: OK");
-    }
-
-    public void setTareWeight(int tareWeight) throws JposException {
-        logger.debug("setTareWeight(" + tareWeight + ")");
-        checkEnabled();
-
-        try {
-            this.tareWeight = tareWeight;
-            scale.tara((long) tareWeight);
-        } catch (Exception e) {
-            throw getJposException(e);
-        }
-
-        logger.debug("setTareWeight: OK");
-    }
-
-    public void setUnitPrice(long arg0) throws JposException {
-        logger.debug("setUnitPrice(" + arg0 + ")");
-        logger.debug("setUnitPrice: JPOS_E_ILLEGAL");
-        throw new JposException(JPOS_E_ILLEGAL, "Не поддерживается");
-    }
-
-    public void zeroScale() throws JposException {
-        logger.debug("zeroScale()");
-        checkEnabled();
-        try {
-            scale.zero();
-        } catch (Exception e) {
-            throw getJposException(e);
-        }
-        logger.debug("zeroScale: OK");
-    }
-
-    public int getMaximumWeight() throws JposException {
-        logger.debug("getMaximumWeight()");
-        logger.debug("getMaximumWeight = 2147483647");
-        return 2147483647;
-    }
-
-    public int getWeightUnit() throws JposException {
-        logger.debug("getWeightUnit()");
-        checkOpened();
-        logger.debug("getWeightUnit() = SCAL_WU_GRAM");
-        return ScaleConst.SCAL_WU_GRAM;
-    }
-
-    public void readWeight(int[] data, int timeout) throws JposException {
-        logger.debug("readWeight(" + data + ", " + timeout + ")");
-
-        checkEnabled();
-
-        // Проверяем состояние ошибки
-        if (state == S_ERROR) {
-            throw new JposException(JPOS_E_FAILURE, "Устройство в состоянии ошибки. Вызовите clearInput()");
-        }
-
-        try {
-            if (asyncMode) {
-                // Проверяем, не выполняется ли уже асинхронная операция
-                if (asyncOperationInProgress) {
-                    throw new JposException(JPOS_E_BUSY, "Асинхронная операция уже выполняется");
-                }
-                asyncOperationInProgress = true;
-                WeightRequest request = new WeightRequest(timeout);
-                requests.offer(request);
-                return;
-            } else {
-                data[0] = (int) readWeightTimeout(timeout);
-            }
-        } catch (Exception e) {
-            throw getJposException(e);
-        }
-        logger.debug("readWeight: OK");
-    }
-
-    public void checkHealth(int arg0) throws JposException {
-        logger.debug("checkHealth(" + arg0 + ")");
-        logger.debug("checkHealth = JPOS_E_ILLEGAL");
-        throw new JposException(JPOS_E_ILLEGAL, "Неподдерживается");
-    }
-
-    public void directIO(int arg0, int[] arg1, Object arg2) throws JposException {
-        logger.debug("directIO(" + arg0 + ", " + arg1 + ", " + arg2 + ")");
-        logger.debug("directIO = JPOS_E_ILLEGAL");
-        throw new JposException(JPOS_E_ILLEGAL, "Неизвестная команда");
-    }
-
-    public String getCheckHealthText() throws JposException {
-        logger.debug("getCheckHealthText()");
-        logger.debug("getCheckHealthText = ");
-        return "";
-    }
-
-    public boolean getClaimed() throws JposException {
-        logger.debug("getClaimed()");
-        logger.debug("getClaimed = " + (state >= S_CLAIMED));
-        return (state >= S_CLAIMED);
-    }
-
-    public String getDeviceServiceDescription() throws JposException {
-        logger.debug("getDeviceServiceDescription()");
-        logger.debug("getDeviceServiceDescription = ScalePos2Service");
-        return "ScalePos2Service";
-    }
-
-    public int getDeviceServiceVersion() throws JposException {
-        // Уменьшаем версию до реально поддерживаемой (1.9 + ZeroValid из 1.13)
-        // Формат: MMMnnnbbb (Major*1000000 + Minor*1000 + Build)
-        int version = 1009000 + ServiceVersionUtil.getVersionInt(); // Заявляем версию 1.9
-        logger.debug("getDeviceServiceVersion()");
-        logger.debug("getDeviceServiceVersion = " + version);
-        return version;
-    }
-
-    public boolean getFreezeEvents() throws JposException {
-        logger.debug("getFreezeEvents()");
-        logger.debug("getFreezeEvents = " + freezeEvents);
-        return freezeEvents;
-    }
-
-    public void setFreezeEvents(boolean freezeEvents) throws JposException {
-        logger.debug("setFreezeEvents(" + freezeEvents + ")");
-        checkOpened();
-
-        this.freezeEvents = freezeEvents;
-
-        // Запускаем поток обработки событий, если он еще не запущен
-        if (eventThread == null) {
-            eventThread = new Thread(new EventTarget(this));
-            eventThread.setName("ScaleEventThread");
-            eventThread.start();
-        }
-
-        logger.debug("setFreezeEvents: OK");
-    }
-
-    class EventTarget implements Runnable {
-
-        private final ScaleService service;
-
-        public EventTarget(ScaleService service) {
-            this.service = service;
-        }
-
-        public void run() {
-            service.eventProc();
-        }
-    }
-
-    class PollTarget implements Runnable {
-
-        private final ScaleService service;
-
-        public PollTarget(ScaleService service) {
-            this.service = service;
-        }
-
-        public void run() {
-            service.pollProc();
-        }
-    }
-
-    /**
-     * Обработка autoDisable после отправки DataEvent Теперь вызывается
-     * синхронно в потоке обработки событий
-     */
-    private void handleAutoDisableAfterDataEvent() {
-        if (autoDisable) {
-            try {
-                logger.debug("AutoDisable: disabling device after DataEvent");
-                setDeviceEnabled(false);
-            } catch (JposException e) {
-                logger.error("AutoDisable failed", e);
-            }
-        }
-    }
-
-    public void eventProc() {
-        logger.debug("Event processing thread started");
-        try {
-            while (!Thread.interrupted()) {
-                try {
-                    // Берем событие из очереди, ждем до 100 мс
-                    JposEvent event = eventQueue.poll(100, TimeUnit.MILLISECONDS);
-
-                    if (event == null) {
-                        continue; // Таймаут, проверяем флаги
-                    }
-
-                    // Проверяем, можно ли доставить событие
-                    boolean canDeliver = true;
-
-                    if (event instanceof DataEvent) {
-                        synchronized (this) {
-                            canDeliver = dataEventEnabled && !freezeEvents;
-                        }
-                    } else {
-                        canDeliver = !freezeEvents;
-                    }
-
-                    if (canDeliver) {
-                        fireJposEvent(event);
-
-                        // Обработка autoDisable после отправки DataEvent
-                        if (event instanceof DataEvent) {
-                            handleAutoDisableAfterDataEvent();
-                        }
-                    } else {
-                        // Если доставить нельзя, возвращаем событие в начало очереди
-                        // Используем offer, чтобы не блокироваться
-                        boolean returned = eventQueue.offer(event);
-                        if (!returned) {
-                            logger.error("Failed to return event to queue, event lost: " + event);
-                        }
-
-                        // Ждем немного, чтобы не крутиться в пустом цикле
-                        Thread.sleep(10);
-                    }
-
-                } catch (InterruptedException e) {
-                    logger.debug("Event thread interrupted");
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
-        } catch (Exception e) {
-            logger.error("eventProc error", e);
-        } finally {
-            logger.debug("Event processing thread stopped");
-        }
-    }
-
-    private void fireJposEvent(JposEvent event) {
-        if (eventsCallback == null) {
-            return;
-        }
-
-        logger.debug("fireJposEvent, " + event);
-        if (event instanceof StatusUpdateEvent) {
-            logger.debug("fireStatusUpdateEvent, " + event);
-            eventsCallback.fireStatusUpdateEvent((StatusUpdateEvent) event);
-        }
-        if (event instanceof DataEvent) {
-            logger.debug("fireDataEvent, " + event);
-            eventsCallback.fireDataEvent((DataEvent) event);
-        }
-        if (event instanceof DirectIOEvent) {
-            logger.debug("fireDirectIOEvent, " + event);
-            eventsCallback.fireDirectIOEvent((DirectIOEvent) event);
-        }
-        if (event instanceof ErrorEvent) {
-            logger.debug("fireErrorEvent, " + event);
-            eventsCallback.fireErrorEvent((ErrorEvent) event);
-        }
-        if (event instanceof OutputCompleteEvent) {
-            logger.debug("fireOutputCompleteEvent, " + event);
-            eventsCallback.fireOutputCompleteEvent((OutputCompleteEvent) event);
-        }
-    }
-
-    private void addEvent(JposEvent event) {
-        eventQueue.offer(event);
-    }
-
-    private void statusUpdateEvent(int value) {
-        logger.debug("statusUpdateEvent(" + value + ")");
-        if ((value >= SCL_SUE_STABLE_WEIGHT) && (value <= SCAL_SUE_WEIGHT_UNDER_ZERO)) {
-            if (statusNotify == SCAL_SN_ENABLED) {
-                addEvent(new StatusUpdateEvent(this, value));
-            }
-        } else {
-            addEvent(new StatusUpdateEvent(this, value));
-        }
-    }
-
-    public String getPhysicalDeviceDescription() throws JposException {
-        logger.debug("getPhysicalDeviceDescription()");
-        checkOpened();
-        switch (scale.getType()) {
-            case Pos2:
-                return "Весы ШТРИХ-М POS2";
-            case Shtrih5:
-                return "Весы ШТРИХ-М ШТРИХ5";
-            case Shtrih6:
-                return "Весы ШТРИХ-М ШТРИХ6";
-        }
-        logger.debug("getPhysicalDeviceDescription = Весы ШТРИХ-М");
-        return "Весы ШТРИХ-М";
-    }
-
-    public String getPhysicalDeviceName() throws JposException {
-        logger.debug("getPhysicalDeviceName()");
-        checkOpened();
-        String s = getPhysicalDeviceDescription();
-        logger.debug("getPhysicalDeviceName = " + s);
-        return s;
-    }
-
-    public int getState() throws JposException {
-        logger.debug("getState()");
-
-        int result = JPOS_S_ERROR;
-
-        // Проверяем состояние ошибки
-        if (state == S_ERROR) {
-            return JPOS_S_ERROR;
-        }
-
-        // Проверяем, выполняется ли асинхронная операция
-        if (asyncMode && asyncOperationInProgress) {
-            result = JPOS_S_BUSY;
-        } else {
-            switch (state) {
-                case S_CLOSED:
-                    result = JPOS_S_CLOSED;
-                    break;
-                case S_OPENED:
-                case S_CLAIMED:
-                case S_ENABLED:
-                    result = JPOS_S_IDLE;
-                    break;
-                default:
-                    result = JPOS_S_ERROR;
-            }
-        }
-        logger.debug("getState = " + JposUtils.getStateText(result));
-        return result;
-    }
-
-    public boolean getDeviceEnabled() throws JposException {
-        logger.debug("getDeviceEnabled()");
-        logger.debug("getDeviceEnabled = " + (state >= S_ENABLED));
-        return (state >= S_ENABLED);
-    }
-
-    public void setDeviceEnabled(boolean enabled) throws JposException {
-        logger.debug("setDeviceEnabled(" + enabled + ")");
-        checkClaimed();
-
-        try {
-            if (enabled) {
-                state = S_ENABLED;
-                readScaleWeight();
-                setPowerState(JPOS_PS_ONLINE);
-
-                // Запускаем pollThread только если pollEnabled == true
-                if (pollEnabled) {
-                    pollThread = new Thread(new PollTarget(this));
-                    pollThread.setName("ScalePollThread");
-                    pollThread.start();
-                    logger.debug("Poll thread started");
-                } else {
-                    logger.debug("Poll thread is disabled by pollEnabled=false");
-                }
-
-                // Запускаем поток обработки событий
-                if (eventThread == null) {
-                    eventThread = new Thread(new EventTarget(this));
-                    eventThread.setName("ScaleEventThread");
-                    eventThread.start();
-                }
-            } else {
-                state = S_CLAIMED;
-                setPowerState(JPOS_PS_UNKNOWN);
-
-                // Сбрасываем флаг операции
-                asyncOperationInProgress = false;
-                currentRequest = null;
-
-                // Останавливаем асинхронный режим
-                if (asyncMode) {
-                    logger.debug("Stopping async mode");
-                    setAsyncMode(false);
-                }
-
-                // Останавливаем pollThread
-                if (pollThread != null) {
-                    pollThread.interrupt();
-                    try {
-                        pollThread.join(1000);
-                    } catch (InterruptedException e) {
-                        logger.error("Error stopping pollThread", e);
-                        Thread.currentThread().interrupt();
-                    }
-                    pollThread = null;
-                    logger.debug("Poll thread stopped");
-                }
-
-                // Очищаем очереди
-                requests.clear();
-                logger.debug("Requests queue cleared");
-
-                // Поток событий не останавливаем, он должен продолжать обрабатывать оставшиеся события
-            }
-        } catch (Exception e) {
-            throw getJposException(e);
-        }
-        logger.debug("setDeviceEnabled: OK");
-    }
-
-    public void deleteInstance() throws JposException {
-        logger.debug("deleteInstance()");
-    }
-
-    public boolean getZeroValid() throws JposException {
-        logger.debug("getZeroValid()");
-        logger.debug("getZeroValid = " + zeroValid);
-        return zeroValid;
-    }
-
-    public void setZeroValid(boolean zeroValid) throws JposException {
-        logger.debug("setZeroValid(" + zeroValid + ")");
-        this.zeroValid = zeroValid;
-        logger.debug("setZeroValid: OK");
-    }
-
-    private void handleErrorEvent(ErrorEvent event) {
-        logger.debug("handleErrorEvent(" + event + ")");
-
-        // Переводим устройство в состояние ошибки
-        state = S_ERROR;
-
-        // Добавляем событие в очередь
-        addEvent(event);
-
-        logger.debug("handleErrorEvent: OK");
-    }
-
-    private void checkOpened() throws JposException {
-        if (state < S_OPENED) {
-            logger.debug("checkOpened() JPOS_E_CLOSED");
-            throw new JposException(JPOS_E_CLOSED);
-        }
-    }
-
-    private void checkClaimed() throws JposException {
-        if (state < S_CLAIMED) {
-            logger.debug("checkClaimed = JPOS_E_NOTCLAIMED");
-            throw new JposException(JPOS_E_NOTCLAIMED);
-        }
-    }
-
-    private void checkEnabled() throws JposException {
-        if (state < S_ENABLED) {
-            logger.debug("checkEnabled() JPOS_E_DISABLED");
-            throw new JposException(JPOS_E_DISABLED);
-        }
-    }
-
-    public void pollProc() {
-        int pollInterval = 100;
-        try {
-            logger.debug("Poll thread start");
-            while (!Thread.interrupted()) {
-                readScaleWeight();
-                Thread.sleep(pollInterval);
-            }
-            logger.debug("Poll thread stop");
-        } catch (InterruptedException e) {
-            logger.debug("Poll thread interrupted");
-            Thread.currentThread().interrupt();
-        } catch (Exception e) {
-            logger.error("Poll proc error", e);
-        }
-    }
-
-    private ScaleWeight readScaleWeight() throws JposException {
-        try {
-            ScaleWeight weight = scale.getWeight();
-
-            // Защита от NPE
-            if (weight == null) {
-                logger.warn("readScaleWeight: weight is null");
-                return null;
-            }
-
-            if (weight.status == null) {
-                logger.warn("readScaleWeight: weight.status is null");
-                return null;
-            }
-
-            ScaleWeight previousWeight = m_weight;
-
-            if (powerNotify == JPOS_PN_ENABLED) {
-                setPowerState(JPOS_PS_ONLINE);
-            }
-
-            if (weight.status.isStable()) {
-                scaleLiveWeight = weight.weight;
-            }
-
-            boolean isStableChanged = (previousWeight == null)
-                    || (weight.status.isStable() != previousWeight.status.isStable());
-
-            if (isStableChanged) {
-                if (weight.status.isStable()) {
-                    statusUpdateEvent(SCAL_SUE_STABLE_WEIGHT);
-                } else {
-                    statusUpdateEvent(SCAL_SUE_WEIGHT_UNSTABLE);
-                }
-            }
-
-            boolean isZeroChanged = (weight.weight == 0)
-                    && ((previousWeight == null) || (previousWeight.weight != 0));
-
-            if (isZeroChanged) {
-                statusUpdateEvent(SCAL_SUE_WEIGHT_ZERO);
-            }
-
-            boolean isUnderZeroChanged = (weight.weight < 0)
-                    && ((previousWeight == null) || (previousWeight.weight >= 0));
-
-            if (isUnderZeroChanged) {
-                statusUpdateEvent(SCAL_SUE_WEIGHT_UNDER_ZERO);
-            }
-
-            boolean isOverweightChanged = weight.status.isOverweight()
-                    && ((previousWeight == null) || (!previousWeight.status.isOverweight()));
-
-            if (isOverweightChanged) {
-                statusUpdateEvent(SCAL_SUE_WEIGHT_OVERWEIGHT);
-            }
-
-            m_weight = weight;
-            return weight;
-
-        } catch (Exception e) {
-            logger.error("Exception in readScaleWeight", e);
-            throw getJposException(e);
-        }
-    }
-
-    public long readWeightTimeout(int timeout) throws JposException, InterruptedException {
-        long startTime = System.currentTimeMillis();
-        while (!Thread.currentThread().isInterrupted()) {
-            ScaleWeight weight = readScaleWeight();
-            if (weight == null) {
-                return 0;
-            }
-
-            if (weight.status.isStable()) {
-                // Проверка на перегруз
-                if (weight.status.isOverweight()) {
-                    throw new JposException(JPOS_E_EXTENDED,
-                            ScaleConst.JPOS_ESCAL_OVERWEIGHT,
-                            "Вес превышает максимальный");
-                }
-
-                // Обработка нулевого веса
-                if (weight.weight == 0) {
-                    if (zeroValid) {
-                        return weight.weight;
-                    }
-                    // Если zeroValid = false, продолжаем ждать стабильный ненулевой вес
-                    // НЕ возвращаем 0
-                } else {
-                    return weight.weight;
-                }
-            }
-
-            // Проверка таймаута
-            if (timeout == 0) {
-                return weight.weight; // Возвращаем текущий вес (возможно нестабильный)
-            }
-
-            if (System.currentTimeMillis() > (startTime + timeout)) {
-                return weight.weight; // Возвращаем текущий вес по таймауту
-            }
-            Thread.sleep(10);
-        }
-        throw new InterruptedException("Thread interrupted while reading weight");
-    }
-
-    class WeightTarget implements Runnable {
-
-        private final ScaleService service;
-
-        public WeightTarget(ScaleService service) {
-            this.service = service;
-        }
-
-        public void run() {
-            service.weightProc();
-        }
-    }
-
-    public void weightProc() {
-        logger.debug("Weight processing thread started");
-        try {
-            while (!Thread.interrupted()) {
-                try {
-                    // Берем запрос из очереди, блокируясь до появления элемента
-                    currentRequest = requests.take();
-                } catch (InterruptedException e) {
-                    logger.debug("Weight thread interrupted while waiting for request");
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-
-                // Обрабатываем запрос
-                boolean retry = false;
-                ErrorEvent errorEvent = null;
-
-                do {
-                    retry = false;
-                    try {
-                        logger.debug("Processing weight request with timeout: " + currentRequest.getTimeout());
-                        long weight = readWeightTimeout(currentRequest.getTimeout());
-                        DataEvent event = new DataEvent(this, (int) weight);
-                        addEvent(event);
-                        logger.debug("Weight request processed, weight: " + weight);
-                    } catch (JposException e) {
-                        logger.error("Error processing weight request", e);
-
-                        // Создаем ErrorEvent
-                        errorEvent = new ErrorEvent(this,
-                                e.getErrorCode(), e.getErrorCodeExtended(),
-                                JPOS_EL_INPUT, // Locus = INPUT
-                                JPOS_ER_CLEAR); // Default response = CLEAR
-
-                        // Переводим устройство в состояние ошибки
-                        state = S_ERROR;
-
-                        // Добавляем событие в очередь и синхронизируемся для wait/notify
-                        synchronized (errorEvent) {
-                            addEvent(errorEvent);
-
-                            // Ждем, пока приложение обработает событие и изменит ErrorResponse
-                            try {
-                                logger.debug("Waiting for ErrorEvent processing...");
-                                errorEvent.wait(5000); // Ждем до 5 секунд
-                            } catch (InterruptedException ie) {
-                                logger.debug("Wait interrupted");
-                                Thread.currentThread().interrupt();
-                            }
-                        }
-
-                        // Проверяем ответ приложения
-                        if (errorEvent.getErrorResponse() == JPOS_ER_RETRY) {
-                            logger.debug("Retrying operation after ER_RETRY");
-                            retry = true;
-                            // Сбрасываем состояние ошибки
-                            state = S_ENABLED;
-                        } else if (errorEvent.getErrorResponse() == JPOS_ER_CLEAR) {
-                            logger.debug("Clearing after ER_CLEAR");
-                            // Очищаем очередь
-                            eventQueue.clear();
-                            // Сбрасываем состояние ошибки
-                            state = S_ENABLED;
-                        }
-                    } catch (InterruptedException e) {
-                        logger.debug("Weight thread interrupted during processing");
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
-                } while (retry);
-
-                // Сбрасываем флаг операции после завершения (успех или ошибка)
-                asyncOperationInProgress = false;
-                currentRequest = null;
-
-                // Уведомляем ErrorEvent, если он все еще ждет (на случай таймаута)
-                if (errorEvent != null) {
-                    synchronized (errorEvent) {
-                        errorEvent.notifyAll();
-                    }
-                }
-            }
-        } catch (Exception e) {
-            logger.error("Unexpected error in weightProc", e);
-        } finally {
-            logger.debug("Weight processing thread stopped");
-            asyncOperationInProgress = false;
-            currentRequest = null;
-        }
-    }
-
+    // ======================== ОБРАБОТКА ИСКЛЮЧЕНИЙ ========================
     private JposException getJposException(Exception e) {
         logger.error("Exception caught", e);
+
         if (e instanceof JposException) {
             return (JposException) e;
         }
+
         if (e instanceof DeviceError) {
             DeviceError deviceError = (DeviceError) e;
             switch (deviceError.getCode()) {
-                case IDevice.ERROR_NOLINK: {
+                case IDevice.ERROR_NOLINK:
                     setPowerState(JPOS_PS_OFF_OFFLINE);
-                    // Используем более подходящий код ошибки
                     return new JposException(JPOS_E_OFFLINE, e.getMessage());
-                }
-                default: {
-                    return new JposException(JposConst.JPOS_E_FAILURE, e.getMessage());
-                }
+                default:
+                    return new JposException(JPOS_E_FAILURE, e.getMessage());
             }
         }
-        return new JposException(JposConst.JPOS_E_FAILURE, e.getMessage());
+
+        return new JposException(JPOS_E_FAILURE, e.getMessage());
     }
 
-    public void setPowerState(int powerState) {
-        if (powerNotify == JPOS_PN_ENABLED) {
-            if (powerState != this.powerState) {
-                switch (powerState) {
-                    case JPOS_PS_ONLINE:
-                        statusUpdateEvent(JPOS_SUE_POWER_ONLINE);
-                        break;
-                    case JPOS_PS_OFF:
-                        statusUpdateEvent(JPOS_SUE_POWER_OFF);
-                        break;
-                    case JPOS_PS_OFFLINE:
-                        statusUpdateEvent(JPOS_SUE_POWER_OFFLINE);
-                        break;
-                    case JPOS_PS_OFF_OFFLINE:
-                        statusUpdateEvent(JPOS_SUE_POWER_OFF_OFFLINE);
-                        break;
-                }
-            }
+    // ======================== ДОПОЛНИТЕЛЬНЫЕ МЕТОДЫ ========================
+    public void setPollEnabled(boolean pollEnabled) {
+        logger.debug("setPollEnabled(" + pollEnabled + ")");
+        this.pollEnabled = pollEnabled;
+        if (deviceEnabled && pollEnabled) {
+            startPollThread();
         }
-        this.powerState = powerState;
+        logger.debug("setPollEnabled: OK");
     }
 
-    // === Методы из версии 1.14 (заглушки, выбрасывающие исключения) ===
-    public void doPriceCalculating(int[] weightData, int[] tare, long[] unitPrice,
-            long[] unitPriceX, int[] weightUnitX,
-            int[] weightNumeratorX, int[] weightDenominatorX,
-            long[] price, int timeout) throws JposException {
-        logger.debug("doPriceCalculating()");
-        throw new JposException(JPOS_E_ILLEGAL, "Не поддерживается");
+    public boolean getPollEnabled() {
+        logger.debug("getPollEnabled");
+        logger.debug("getPollEnabled: " + pollEnabled);
+        return pollEnabled;
     }
-
-    public void freezeValue(int item, boolean freeze) throws JposException {
-        logger.debug("freezeValue()");
-        throw new JposException(JPOS_E_ILLEGAL, "Не поддерживается");
-    }
-
-    public void readLiveWeightWithTare(int[] weightData, int[] tare, int timeout) throws JposException {
-        logger.debug("readLiveWeightWithTare()");
-        throw new JposException(JPOS_E_ILLEGAL, "Не поддерживается");
-    }
-
-    public void setPriceCalculationMode(int mode) throws JposException {
-        logger.debug("setPriceCalculationMode()");
-        throw new JposException(JPOS_E_ILLEGAL, "Не поддерживается");
-    }
-
-    public void setSpecialTare(int mode, int data) throws JposException {
-        logger.debug("setSpecialTare()");
-        throw new JposException(JPOS_E_ILLEGAL, "Не поддерживается");
-    }
-
-    public void setTarePriority(int priority) throws JposException {
-        logger.debug("setTarePriority()");
-        throw new JposException(JPOS_E_ILLEGAL, "Не поддерживается");
-    }
-
-    public void setUnitPriceWithWeightUnit(long unitPrice, int weightUnit,
-            int weightNumerator, int weightDenominator) throws JposException {
-        logger.debug("setUnitPriceWithWeightUnit()");
-        throw new JposException(JPOS_E_ILLEGAL, "Не поддерживается");
-    }
-
 }
