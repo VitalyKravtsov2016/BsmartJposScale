@@ -60,16 +60,20 @@ public class GnuSerialPort implements SerialPort {
     }
 
     public void open() throws Exception {
+        open(openTimeout);
+    }
+
+    public void open(int openTimeout) throws Exception {
+        this.openTimeout = openTimeout;
+
         if (isOpened()) {
             return;
         }
         logger.debug("open(" + portName + ")");
-        try
-        {
+        try {
             gnu.io.CommPortIdentifier portIdentifier;
             portIdentifier = gnu.io.CommPortIdentifier.getPortIdentifier(portName);
-            if (portIdentifier == null) 
-            {
+            if (portIdentifier == null) {
                 throw new gnu.io.NoSuchPortException();
             }
             port = (gnu.io.SerialPort) portIdentifier.open(appName,
@@ -82,10 +86,8 @@ public class GnuSerialPort implements SerialPort {
             port.setInputBufferSize(1024);
             port.setOutputBufferSize(1024);
             port.setFlowControlMode(gnu.io.SerialPort.FLOWCONTROL_NONE);
-            port.enableReceiveTimeout(openTimeout);
-        }
-        catch (gnu.io.NoSuchPortException e)
-        {
+            port.enableReceiveTimeout(readTimeout);
+        } catch (gnu.io.NoSuchPortException e) {
             String errorText = IDevice.TEXT_ERROR_NOTSUCHPORT + ", " + portName;
             throw new DeviceError(IDevice.ERROR_NOSUCHPORT, errorText);
         }
@@ -101,10 +103,6 @@ public class GnuSerialPort implements SerialPort {
         if (isOpened()) {
             port.close();
             port = null;
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException e) {
-            }
         }
         logger.debug("close: OK");
     }
@@ -126,28 +124,24 @@ public class GnuSerialPort implements SerialPort {
 
         int result;
         InputStream is;
-        try {
-            is = port.getInputStream();
-            if (is == null) {
-                return -1;
-            }
 
-            long startTime = System.currentTimeMillis();
-            for (;;) {
-                long currentTime = System.currentTimeMillis();
-                if (is.available() > 0) {
-                    result = is.read();
-                    if (result >= 0) {
-                        return result;
-                    }
-                }
-                if ((currentTime - startTime) > readTimeout) {
-                    throw new DeviceError(IDevice.ERROR_NOLINK, IDevice.TEXT_ERROR_NOLINK);
+        is = port.getInputStream();
+        if (is == null) {
+            return -1;
+        }
+
+        long startTime = System.currentTimeMillis();
+        for (;;) {
+            long currentTime = System.currentTimeMillis();
+            if (is.available() > 0) {
+                result = is.read();
+                if (result >= 0) {
+                    return result;
                 }
             }
-        } catch (Exception e) {
-            close();
-            throw e;
+            if ((currentTime - startTime) > readTimeout) {
+                throw new DeviceError(IDevice.ERROR_NOLINK, IDevice.TEXT_ERROR_NOLINK);
+            }
         }
     }
 
@@ -192,15 +186,10 @@ public class GnuSerialPort implements SerialPort {
         Logger2.logTx(logger, in.data);
 
         open();
-        try {
-            OutputStream out = port.getOutputStream();
-            out.write(in.data);
-            if (flush) {
-                out.flush();
-            }
-        } catch (Exception e) {
-            close();
-            throw e;
+        OutputStream out = port.getOutputStream();
+        out.write(in.data);
+        if (flush) {
+            out.flush();
         }
     }
 

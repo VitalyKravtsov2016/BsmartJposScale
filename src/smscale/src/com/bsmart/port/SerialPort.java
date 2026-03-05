@@ -6,6 +6,8 @@ package com.bsmart.port;
 public interface SerialPort 
 {
     void open() throws Exception;
+    
+    void open(int openTimeout) throws Exception;
 
     void close();
 

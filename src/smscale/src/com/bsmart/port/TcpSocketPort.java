@@ -8,11 +8,11 @@ import java.util.*;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 
-
 /**
  * @author V.Kravtsov
  */
 public class TcpSocketPort implements SerialPort {
+
     private static Logger logger = LogManager.getLogger(TcpSocketPort.class);
 
     public String portName;
@@ -27,8 +27,12 @@ public class TcpSocketPort implements SerialPort {
         return socket != null && socket.isConnected();
     }
 
-    public void open() throws Exception 
-    {
+    public void open() throws Exception {
+        open(openTimeout);
+    }
+
+    public void open(int openTimeout) throws Exception {
+        this.openTimeout = openTimeout;
         if (isOpened()) {
             return;
         }
@@ -83,8 +87,7 @@ public class TcpSocketPort implements SerialPort {
         return data;
     }
 
-    public void write(byte[] b) throws Exception 
-    {
+    public void write(byte[] b) throws Exception {
         Logger2.logTx(logger, b);
         OutputStream os = socket.getOutputStream();
         for (int i = 0; i < 2; i++) {
@@ -115,8 +118,9 @@ public class TcpSocketPort implements SerialPort {
 
         this.readTimeout = timeout;
 
-        if (isOpened())
+        if (isOpened()) {
             socket.setSoTimeout(readTimeout);
+        }
     }
 
     public String getPortName() {
@@ -136,6 +140,6 @@ public class TcpSocketPort implements SerialPort {
     }
 
     public String[] getPortNames() {
-        return new String[] { portName };
+        return new String[]{portName};
     }
 }

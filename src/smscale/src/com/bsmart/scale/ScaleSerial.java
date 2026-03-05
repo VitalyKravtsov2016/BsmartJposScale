@@ -63,12 +63,11 @@ public class ScaleSerial implements IScale, IDevice {
     }
 
     public void connect() throws Exception {
-        openPort();
     }
 
-    public void openPort() throws Exception {
+    public void openPort(int openTimeout) throws Exception {
         logger.debug("openPort()");
-        getSerialPort().open();
+        getSerialPort().open(openTimeout);
         logger.debug("openPort: OK");
     }
 

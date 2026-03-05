@@ -102,6 +102,10 @@ public class TestScaleSerial extends ScaleSerial {
     }
     
     @Override
+    public void openPort(int openTimeout) throws Exception {
+    }
+    
+    @Override
     public void disconnect() {
         connected = false;
     }

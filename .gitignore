@@ -8,3 +8,5 @@ gradle-app.setting
 *.class
 /src/JposScale/dist/
 /src/JposScale/build/
+/src/smscale/nbproject/private/
+/src/smscale/dist/

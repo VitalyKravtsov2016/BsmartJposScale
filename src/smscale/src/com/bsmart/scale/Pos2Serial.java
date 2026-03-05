@@ -87,9 +87,11 @@ public class Pos2Serial extends ScaleSerial {
     }
 
     public void connect() throws Exception {
-        int byteTimeout = params.getInt(IDevice.PARAM_OPEN_TIMEOUT);
-        getProtocol().setByteTimeout(byteTimeout);
-        openPort();
+        int openTimeout = params.getInt(IDevice.PARAM_OPEN_TIMEOUT);
+        openPort(openTimeout);
+        
+        int readTimeout = params.getInt(IDevice.PARAM_OPEN_TIMEOUT);
+        getProtocol().setByteTimeout(readTimeout);
     }
 
     // ==================== НОВЫЕ КОМАНДЫ ====================

@@ -671,7 +671,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         }
 
         try {
-            scale.connect();
+            scale.openPort(timeout);
             deviceMetrics = scale.getDeviceMetrics();
 
             //maximumWeight = (int) deviceMetrics.getMaximumWeight();
