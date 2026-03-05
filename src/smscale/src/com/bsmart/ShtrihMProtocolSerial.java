@@ -16,7 +16,7 @@ import org.apache.logging.log4j.LogManager;
 public class ShtrihMProtocolSerial {
 
     private static final int maxENQCount = 1;
-    private int byteTimeout = 100;
+    private int byteTimeout = 300;
     private final SerialPort serialPort;
     private final Logger logger = LogManager.getLogger(ShtrihMProtocolSerial.class);
 

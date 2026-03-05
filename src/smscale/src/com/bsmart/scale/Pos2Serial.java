@@ -81,6 +81,9 @@ public class Pos2Serial extends ScaleSerial {
     private ShtrihMProtocolSerial getProtocol() throws Exception {
         if (protocol == null) {
             protocol = new ShtrihMProtocolSerial(getSerialPort());
+            
+            int readTimeout = params.getInt(IDevice.PARAM_READ_TIMEOUT);
+            protocol.setByteTimeout(readTimeout);
         }
                 
         return protocol;
@@ -90,7 +93,7 @@ public class Pos2Serial extends ScaleSerial {
         int openTimeout = params.getInt(IDevice.PARAM_OPEN_TIMEOUT);
         openPort(openTimeout);
         
-        int readTimeout = params.getInt(IDevice.PARAM_OPEN_TIMEOUT);
+        int readTimeout = params.getInt(IDevice.PARAM_READ_TIMEOUT);
         getProtocol().setByteTimeout(readTimeout);
     }
 

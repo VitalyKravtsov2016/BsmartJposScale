@@ -6,6 +6,15 @@
       
 ********************************************************************************
 
+  March, 5 2026 14:30
+  deviceServiceVersion = 1013028
+
+  [+] Added readTimeout parameter
+  [-] Removed port close on read/write errors
+  [+] Added support for timeout parameter in claim method
+  
+********************************************************************************
+
   February, 25 2026 19:30
   deviceServiceVersion = 1013027
 

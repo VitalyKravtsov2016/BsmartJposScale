@@ -592,7 +592,8 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         params.set(IDevice.PARAM_STOPBITS, "1");
         params.set(IDevice.PARAM_PARITY, "0");
         params.set(IDevice.PARAM_PASSWORD, "30");
-        params.set(IDevice.PARAM_OPEN_TIMEOUT, "100");
+        params.set(IDevice.PARAM_OPEN_TIMEOUT, "1000");
+        params.set(IDevice.PARAM_READ_TIMEOUT, "1000");
         params.set(IDevice.PARAM_PORTTYPE, "0");
 
         String protocol = "pos2";
@@ -611,9 +612,12 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                 value = reader.readString("password", "30");
                 params.set(IDevice.PARAM_PASSWORD, value);
 
-                value = reader.readString("timeout", "100");
+                value = reader.readString("timeout", "1000");
                 params.set(IDevice.PARAM_OPEN_TIMEOUT, value);
 
+                value = reader.readString("readTimeout", "1000");
+                params.set(IDevice.PARAM_READ_TIMEOUT, value);
+                
                 value = reader.readString("portType", "0");
                 params.set(IDevice.PARAM_PORTTYPE, value);
             }
