@@ -76,9 +76,9 @@ public class ScaleSerial implements IScale, IDevice {
     }
 
     public void closePort() {
-        try {
-            getSerialPort().close();
-        } catch (Exception e) {
+        if (serialPort != null) {
+            serialPort.close();
+            serialPort = null;
         }
     }
 
