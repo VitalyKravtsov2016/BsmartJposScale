@@ -5,11 +5,16 @@
         <group>
             <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/smscale/test/com/bsmart/jpos/scale/TestScaleSerial.java</file>
             <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/smscale/src/com/bsmart/scale/Pos2Serial.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/smscale/src/com/bsmart/test/GnuSerialPortTest.java</file>
             <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/smscale/test/com/bsmart/jpos/scale/ScaleServiceTest.java</file>
             <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/smscale/src/com/bsmart/scale/ScaleSerial.java</file>
             <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/smscale/src/com/bsmart/jpos/scale/ScaleService.java</file>
             <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/smscale/src/com/bsmart/ShtrihMProtocolSerial.java</file>
-            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/smscale/src/com/bsmart/port/GnuSerialPort.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/smscale/src/com/bsmart/scale/IScale.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/smscale/src/com/bsmart/test/ConsoleTest.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/smscale/src/com/bsmart/scaletst/ScaleTest.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/smscale/src/com/bsmart/scale/DeviceFindMulti.java</file>
+            <file>file:/C:/Projects2/Синицын/BsmartJposScale/src/smscale/src/com/bsmart/ScaleTests.java</file>
         </group>
     </open-files>
 </project-private>

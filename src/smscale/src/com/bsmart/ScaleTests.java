@@ -34,40 +34,43 @@ public class ScaleTests implements DataListener {
         try {
             jpos.Scale scale = new jpos.Scale();
             scale.open("Scale");
-            reportCapablities(scale);
-            scale.claim(1000);
-            scale.setDeviceEnabled(true);
-            scale.setAsyncMode(false);
+            try {
+                reportCapablities(scale);
+                scale.claim(1000);
+                scale.setDeviceEnabled(true);
+                scale.setAsyncMode(false);
 
-            int[] weight = new int[1];
+                int[] weight = new int[1];
 
-            System.out.println("scale.readWeight(1000)");
-            while (true) {
-                try {
-                    scale.readWeight(weight, 1000);
-                    System.out.println(String.format("Weight (sync): %.3f  kg.", 
-                        (float) weight[0] / 1000.0f));
-                } catch (Exception e) {
-                    System.out.println("ERROR: " + e.getMessage());
+                System.out.println("scale.readWeight(1000)");
+                while (true) {
+                    try {
+                        scale.readWeight(weight, 1000);
+                        System.out.println(String.format("Weight (sync): %.3f  kg.",
+                                (float) weight[0] / 1000.0f));
+                    } catch (Exception e) {
+                        System.out.println("ERROR: " + e.getMessage());
+                    }
+                    //Thread.sleep(100);
                 }
-                //Thread.sleep(100);
+            } finally {
+                scale.close();
             }
-            //scale.setDeviceEnabled(false);
-            //scale.release();
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
-
     @Override
-    public void dataOccurred(DataEvent event) {
-        System.out.println(String.format("Weight (async): %.3f kg.", 
-            (float) event.getStatus() / 1000.0f));
+    public void dataOccurred(DataEvent event
+    ) {
+        System.out.println(String.format("Weight (async): %.3f kg.",
+                (float) event.getStatus() / 1000.0f));
 
     }
 
     //static
+
     /**
      * @param args
      */

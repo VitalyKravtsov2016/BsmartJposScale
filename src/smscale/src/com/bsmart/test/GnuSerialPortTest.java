@@ -55,12 +55,13 @@ public class GnuSerialPortTest {
         System.out.print("testOpenRelease...");
         
         Scale scale = new Scale();
+        int[] weightData = new int[1];
         try {
             for (int i = 0; i < 10; i++) {
                 scale.open("Scale");
                 scale.claim(2000);
                 scale.setDeviceEnabled(true);
-                Thread.sleep(100);
+                scale.readWeight(weightData, 1000);
                 scale.setDeviceEnabled(false);
                 scale.release();
                 scale.close();

@@ -28,6 +28,12 @@ sourceSets {
             includes = [ "**/*.properties", "**/*.xml" ]
         }
     }
+	
+    acceptanceTest {
+        java {
+            srcDirs = ["test-acceptance"]
+        }
+    }	
 }
 
 repositories {
