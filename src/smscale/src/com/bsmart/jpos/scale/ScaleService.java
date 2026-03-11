@@ -617,7 +617,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
                 value = reader.readString("readTimeout", "1000");
                 params.set(IDevice.PARAM_READ_TIMEOUT, value);
-                
+
                 value = reader.readString("portType", "0");
                 params.set(IDevice.PARAM_PORTTYPE, value);
             }
@@ -637,6 +637,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     @Override
     public void close() throws JposException {
         logger.debug("close()");
+        checkIdleState();
 
         try {
             if (getDeviceEnabled()) {
@@ -712,6 +713,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void release() throws JposException {
         logger.debug("release()");
         checkOpened();
+        checkIdleState();
 
         if (!claimed) {
             logger.debug("release: not claimed");
@@ -721,7 +723,6 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         try {
             scale.disconnect();
             claimed = false;
-            setState(JPOS_S_IDLE);
             logger.debug("release: OK");
         } catch (Exception e) {
             JposException je = getJposException(e);
@@ -734,6 +735,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void setDeviceEnabled(boolean enabled) throws JposException {
         logger.debug("setDeviceEnabled(" + enabled + ")");
         checkClaimed();
+        checkIdleState();
 
         try {
             if (enabled) {
@@ -742,7 +744,6 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                 salesPrice = 0;
 
                 deviceEnabled = true;
-                setState(JPOS_S_IDLE);
                 readScaleWeight();
                 setPowerState(JPOS_PS_ONLINE);
 
@@ -752,7 +753,6 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
             } else {
                 deviceEnabled = false;
-                setState(JPOS_S_IDLE);
                 setPowerState(JPOS_PS_UNKNOWN);
 
                 if (asyncMode) {
@@ -807,26 +807,30 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         logger.debug("clearOutput: OK");
     }
 
+    public synchronized void checkIdleState() throws JposException {
+        if (state == JPOS_S_ERROR) {
+            throw new JposException(JPOS_E_FAILURE, "Device in error state");
+        }
+        if (state == JPOS_S_BUSY) {
+            throw new JposException(JPOS_E_BUSY, "Asynchronous operation already in progress");
+        }
+        if (state == JPOS_S_CLOSED) {
+            throw new JposException(JPOS_E_CLOSED, "Device is closed");
+        }
+    }
+
     @Override
     public void readWeight(int[] weightData, int timeout) throws JposException {
         logger.debug("readWeight(" + weightData + ", " + timeout + ")");
         checkEnabled();
-
-        if (state == JPOS_S_ERROR) {
-            JposException e = new JposException(JPOS_E_FAILURE, "Device in error state. Call clearInput()");
-            logger.error("readWeight: " + e.getMessage());
-            throw e;
-        }
+        checkIdleState();
 
         try {
             if (asyncMode) {
                 // Атомарная проверка и установка состояния
-                synchronized (this) {
-                    if (state == JPOS_S_BUSY) {
-                        JposException e = new JposException(JPOS_E_BUSY, "Asynchronous operation already in progress");
-                        logger.error("readWeight: " + e.getMessage());
-                        throw e;
-                    }
+                synchronized (this) 
+                {
+                    checkIdleState();
                     setState(JPOS_S_BUSY);
                 }
                 requestQueue.offer(new WeightRequest(timeout));
@@ -853,6 +857,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void zeroScale() throws JposException {
         logger.debug("zeroScale()");
         checkEnabled();
+        checkIdleState();
 
         if (!getCapZeroScale()) {
             JposException e = new JposException(JPOS_E_ILLEGAL, "Zero scale not supported");
