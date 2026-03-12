@@ -1,5 +1,8 @@
 package com.bsmart.jpos.scale;
 
+import static jpos.JposConst.*;
+import static jpos.ScaleConst.*;
+
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -7,12 +10,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
-import com.bsmart.jpos.JposPropertyReader;
 
-import com.bsmart.IDevice;
 import com.bsmart.DeviceError;
-import com.bsmart.scale.DeviceMetrics;
+import com.bsmart.IDevice;
+import com.bsmart.jpos.JposPropertyReader;
+import com.bsmart.jpos.JposUtils;
 import com.bsmart.port.GnuSerialPort;
+import com.bsmart.scale.DeviceMetrics;
 import com.bsmart.scale.EScale;
 import com.bsmart.scale.IScale;
 import com.bsmart.scale.Pos2Serial;
@@ -20,29 +24,26 @@ import com.bsmart.scale.ScaleSerial;
 import com.bsmart.scale.ScaleWeight;
 import com.bsmart.scale.Shtrih5Serial;
 import com.bsmart.scale.Shtrih6Serial;
-import com.bsmart.tools.Tools;
 import com.bsmart.tools.StringParams;
-import com.bsmart.jpos.JposUtils;
+import com.bsmart.tools.Tools;
 import com.bsmart.util.ServiceVersionUtil;
 
-import jpos.JposConst;
-import jpos.ScaleConst;
 import jpos.JposException;
 import jpos.config.JposEntryConst;
 import jpos.config.RS232Const;
 import jpos.events.DataEvent;
-import jpos.events.JposEvent;
-import jpos.events.ErrorEvent;
 import jpos.events.DirectIOEvent;
-import jpos.events.StatusUpdateEvent;
+import jpos.events.ErrorEvent;
+import jpos.events.JposEvent;
 import jpos.events.OutputCompleteEvent;
+import jpos.events.StatusUpdateEvent;
 import jpos.services.EventCallbacks;
 import jpos.services.ScaleService113;
 
 /**
  * Реализация сервиса весов для JPOS 1.13 с полным логированием
  */
-public class ScaleService extends Scale implements ScaleService113, ScaleConst, JposConst, JposEntryConst {
+public class ScaleService extends Scale implements ScaleService113 {
 
     private static final long serialVersionUID = 6309237509625068100L;
     private final Logger logger = LogManager.getLogger(ScaleService.class);
@@ -77,13 +78,17 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     private int minimumWeight = 0;
     private int weightUnit = SCAL_WU_GRAM;
 
-    // Потоки и очереди
+    // Потоки
     private EventCallbacks eventsCallback = null;
     private String logicalName = null;
     private Thread eventThread = null;
     private Thread pollThread = null;
     private Thread weightThread = null;
+    
+    // ЕДИНАЯ ОЧЕРЕДЬ СОБЫТИЙ
     private final BlockingQueue<JposEvent> eventQueue = new LinkedBlockingQueue<>();
+    
+    // Очередь асинхронных запросов
     private final BlockingQueue<WeightRequest> requestQueue = new LinkedBlockingQueue<>();
 
     // Управление запросами
@@ -206,16 +211,16 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
     /**
      * Проверяет, что текущий поток не является потоком доставки событий.
-     * Вызов методов, изменяющих жизненный цикл устройства, из потока событий
-     * может привести к взаимной блокировке (deadlock).
+     * Эта проверка нужна ТОЛЬКО для close(), так как close() останавливает
+     * поток событий и ждет его завершения, что может привести к deadlock.
      *
      * @throws JposException с кодом JPOS_E_ILLEGAL, если вызов из потока событий
      */
     private void checkNotInEventThread() throws JposException {
         if (Thread.currentThread() == eventThread) {
-            logger.error("Method called from event handler thread - this would cause deadlock");
+            logger.error("close() called from event handler thread - this would cause deadlock");
             throw new JposException(JPOS_E_ILLEGAL, 
-                "Method cannot be called from event handler thread");
+                "close() cannot be called from event handler thread");
         }
     }
 
@@ -379,7 +384,6 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void setAsyncMode(boolean async) throws JposException {
         logger.debug("setAsyncMode(" + async + ")");
         checkOpened();
-        checkNotInEventThread(); // Защита от deadlock
 
         if (async == this.asyncMode) {
             logger.debug("setAsyncMode: no change");
@@ -402,7 +406,15 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public int getDataCount() throws JposException {
         logger.debug("getDataCount");
         checkOpened();
-        int count = eventQueue.size();
+        
+        // ПРОСМАТРИВАЕМ ВСЮ ОЧЕРЕДЬ, СЧИТАЕМ ТОЛЬКО DataEvent
+        int count = 0;
+        for (JposEvent event : eventQueue) {
+            if (event instanceof DataEvent) {
+                count++;
+            }
+        }
+        
         logger.debug("getDataCount: " + count);
         return count;
     }
@@ -459,7 +471,6 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void setTareWeight(int tareWeight) throws JposException {
         logger.debug("setTareWeight(" + tareWeight + ")");
         checkEnabled();
-        checkNotInEventThread(); // Защита от deadlock
 
         if (!getCapTareWeight()) {
             JposException e = new JposException(JPOS_E_ILLEGAL, "Tare weight not supported");
@@ -641,6 +652,10 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
             scale = createProtocol(protocol);
             scale.setParams(params);
+            
+            // ЗАПУСКАЕМ ПОТОК СОБЫТИЙ СРАЗУ ПОСЛЕ OPEN
+            startEventThread();
+            
             setState(JPOS_S_IDLE);
             logger.debug("open: OK");
 
@@ -654,9 +669,9 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     @Override
     public void close() throws JposException {
         logger.debug("close()");
-        checkIdleState();
-        checkNotInEventThread(); // Защита от deadlock
-
+        // ТОЛЬКО ЗДЕСЬ нужна проверка на поток событий
+        checkNotInEventThread();
+        
         try {
             if (getDeviceEnabled()) {
                 setDeviceEnabled(false);
@@ -665,6 +680,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                 release();
             }
 
+            // ОСТАНАВЛИВАЕМ ВСЕ ПОТОКИ
             stopAllThreads();
 
             asyncMode = false;
@@ -687,7 +703,6 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void claim(int timeout) throws JposException {
         logger.debug("claim(" + timeout + ")");
         checkOpened();
-        checkNotInEventThread(); // Защита от deadlock
 
         if (claimed) {
             logger.debug("claim: already claimed");
@@ -697,10 +712,6 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         try {
             scale.openPort(timeout);
             deviceMetrics = scale.getDeviceMetrics();
-
-            //maximumWeight = (int) deviceMetrics.getMaximumWeight();
-            //minimumWeight = (int) deviceMetrics.getMinimumWeight();
-            //weightUnit = mapWeightUnit(deviceMetrics.getWeightUnit());
             claimed = true;
             logger.debug(deviceMetrics.toString());
             logger.debug("claim: OK");
@@ -732,8 +743,6 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void release() throws JposException {
         logger.debug("release()");
         checkOpened();
-        checkIdleState();
-        checkNotInEventThread(); // Защита от deadlock
 
         if (!claimed) {
             logger.debug("release: not claimed");
@@ -756,8 +765,6 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void setDeviceEnabled(boolean enabled) throws JposException {
         logger.debug("setDeviceEnabled(" + enabled + ")");
         checkClaimed();
-        checkIdleState();
-        checkNotInEventThread(); // Защита от deadlock
 
         try {
             if (enabled) {
@@ -771,7 +778,6 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                 setPowerState(JPOS_PS_ONLINE);
 
                 startPollThread();
-                startEventThread();
                 logger.debug("setDeviceEnabled: device enabled");
 
             } else {
@@ -785,7 +791,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
                 stopPollThread();
                 requestQueue.clear();
-                stopEventThread();
+                
                 logger.debug("setDeviceEnabled: device disabled");
             }
             logger.debug("setDeviceEnabled: OK");
@@ -807,7 +813,8 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         logger.debug("clearInput()");
         checkOpened();
 
-        eventQueue.clear();
+        // Очищаем только DataEvent из очереди
+        eventQueue.removeIf(event -> event instanceof DataEvent);
         requestQueue.clear();
         currentRequest = null;
         setState(JPOS_S_IDLE);
@@ -847,15 +854,15 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void readWeight(int[] weightData, int timeout) throws JposException {
         logger.debug("readWeight(" + weightData + ", " + timeout + ")");
         checkEnabled();
-        checkIdleState();
-        checkNotInEventThread();
 
         try {
             if (asyncMode) {
                 // Атомарная проверка и установка состояния
                 synchronized (this) 
                 {
-                    checkIdleState();
+                    if (state == JPOS_S_BUSY) {
+                        throw new JposException(JPOS_E_BUSY, "Asynchronous operation already in progress");
+                    }
                     setState(JPOS_S_BUSY);
                 }
                 requestQueue.offer(new WeightRequest(timeout));
@@ -882,8 +889,6 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void zeroScale() throws JposException {
         logger.debug("zeroScale()");
         checkEnabled();
-        checkIdleState();
-        checkNotInEventThread();
 
         if (!getCapZeroScale()) {
             JposException e = new JposException(JPOS_E_ILLEGAL, "Zero scale not supported");
@@ -1095,13 +1100,13 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     private void checkWeightErrors(ScaleWeight weight) throws JposException {
         if (weight.status.isOverweight()) {
             throw new JposException(JPOS_E_EXTENDED,
-                    ScaleConst.JPOS_ESCAL_OVERWEIGHT,
+                    JPOS_ESCAL_OVERWEIGHT,
                     "Weight exceeds maximum");
         }
 
         if (weight.weight < 0) {
             throw new JposException(JPOS_E_EXTENDED,
-                    ScaleConst.JPOS_ESCAL_UNDER_ZERO,
+                    JPOS_ESCAL_UNDER_ZERO,
                     "Weight below zero");
         }
 
@@ -1203,36 +1208,43 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void eventProc() {
         logger.debug("Event thread started");
         try {
-            while (!Thread.interrupted() && deviceEnabled) {
-                JposEvent event = eventQueue.poll(100, TimeUnit.MILLISECONDS);
+            while (!Thread.interrupted() && state != JPOS_S_CLOSED) {
+                
+                // Смотрим первый элемент в очереди, не извлекая
+                JposEvent event = eventQueue.peek();
+                
                 if (event == null) {
+                    Thread.sleep(10);
                     continue;
                 }
-
+                
                 boolean canDeliver;
-
                 if (event instanceof DataEvent) {
-                    synchronized (this) {
-                        canDeliver = dataEventEnabled && !freezeEvents;
-                    }
+                    canDeliver = deviceEnabled && dataEventEnabled && !freezeEvents;
                 } else {
                     canDeliver = !freezeEvents;
                 }
-
+                
                 if (canDeliver) {
+                    // Можем доставить - теперь извлекаем
+                    eventQueue.poll();
                     fireJposEvent(event);
-
-                    // Обработка ER_RETRY
+                    
+                    // Специальная обработка для разных типов событий
+                    if (event instanceof DataEvent && autoDisable) {
+                        logger.debug("AutoDisable: disabling device after DataEvent delivery");
+                        try {
+                            setDeviceEnabled(false);
+                        } catch (JposException e) {
+                            logger.error("AutoDisable failed: " + e.getMessage());
+                        }
+                    }
+                    
                     if (event instanceof ErrorEvent) {
                         handleErrorResponse((ErrorEvent) event);
                     }
-
-                    if (event instanceof DataEvent && autoDisable) {
-                        handleAutoDisable();
-                    }
-
                 } else {
-                    eventQueue.offer(event);
+                    // Не можем доставить первый элемент - ждем
                     Thread.sleep(10);
                 }
             }
@@ -1341,8 +1353,8 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         }
 
         switch (e.getErrorCodeExtended()) {
-            case ScaleConst.JPOS_ESCAL_OVERWEIGHT:
-            case ScaleConst.JPOS_ESCAL_UNDER_ZERO:
+            case JPOS_ESCAL_OVERWEIGHT:
+            case JPOS_ESCAL_UNDER_ZERO:
                 return true;
             default:
                 return false;
@@ -1382,36 +1394,37 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         ScaleWeight oldWeight = currentWeight;
 
         if (oldWeight == null || newWeight.status.isStable() != oldWeight.status.isStable()) {
-            statusUpdateEvent(newWeight.status.isStable()
+            addStatusEvent(newWeight.status.isStable()
                     ? SCAL_SUE_STABLE_WEIGHT : SCAL_SUE_WEIGHT_UNSTABLE);
         }
 
         if (newWeight.weight == 0 && (oldWeight == null || oldWeight.weight != 0)) {
-            statusUpdateEvent(SCAL_SUE_WEIGHT_ZERO);
+            addStatusEvent(SCAL_SUE_WEIGHT_ZERO);
         }
 
         if (newWeight.weight < 0 && (oldWeight == null || oldWeight.weight >= 0)) {
-            statusUpdateEvent(SCAL_SUE_WEIGHT_UNDER_ZERO);
+            addStatusEvent(SCAL_SUE_WEIGHT_UNDER_ZERO);
         }
 
         if (newWeight.status.isOverweight()
                 && (oldWeight == null || !oldWeight.status.isOverweight())) {
-            statusUpdateEvent(SCAL_SUE_WEIGHT_OVERWEIGHT);
-        }
-    }
-
-    private void handleAutoDisable() {
-        try {
-            logger.debug("AutoDisable: disabling device after DataEvent");
-            setDeviceEnabled(false);
-        } catch (JposException e) {
-            logger.error("AutoDisable failed", e);
+            addStatusEvent(SCAL_SUE_WEIGHT_OVERWEIGHT);
         }
     }
 
     // ======================== УПРАВЛЕНИЕ СОБЫТИЯМИ ========================
     private void addEvent(JposEvent event) {
         eventQueue.offer(event);
+    }
+    
+    private void addStatusEvent(int status) {
+        if (status >= SCL_SUE_STABLE_WEIGHT && status <= SCAL_SUE_WEIGHT_UNDER_ZERO) {
+            if (statusNotify == SCAL_SN_ENABLED) {
+                addEvent(new StatusUpdateEvent(this, status));
+            }
+        } else {
+            addEvent(new StatusUpdateEvent(this, status));
+        }
     }
 
     private void fireJposEvent(JposEvent event) {
@@ -1434,33 +1447,21 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         }
     }
 
-    private void statusUpdateEvent(int status) {
-        logger.debug("statusUpdateEvent(" + status + ")");
-
-        if (status >= SCL_SUE_STABLE_WEIGHT && status <= SCAL_SUE_WEIGHT_UNDER_ZERO) {
-            if (statusNotify == SCAL_SN_ENABLED) {
-                addEvent(new StatusUpdateEvent(this, status));
-            }
-        } else {
-            addEvent(new StatusUpdateEvent(this, status));
-        }
-    }
-
     // ======================== УПРАВЛЕНИЕ ПИТАНИЕМ ========================
     public void setPowerState(int newPowerState) {
         if (powerNotify == JPOS_PN_ENABLED && newPowerState != this.powerState) {
             switch (newPowerState) {
                 case JPOS_PS_ONLINE:
-                    statusUpdateEvent(JPOS_SUE_POWER_ONLINE);
+                    addStatusEvent(JPOS_SUE_POWER_ONLINE);
                     break;
                 case JPOS_PS_OFF:
-                    statusUpdateEvent(JPOS_SUE_POWER_OFF);
+                    addStatusEvent(JPOS_SUE_POWER_OFF);
                     break;
                 case JPOS_PS_OFFLINE:
-                    statusUpdateEvent(JPOS_SUE_POWER_OFFLINE);
+                    addStatusEvent(JPOS_SUE_POWER_OFFLINE);
                     break;
                 case JPOS_PS_OFF_OFFLINE:
-                    statusUpdateEvent(JPOS_SUE_POWER_OFF_OFFLINE);
+                    addStatusEvent(JPOS_SUE_POWER_OFF_OFFLINE);
                     break;
             }
         }

@@ -6,6 +6,13 @@
       
 ********************************************************************************
 
+  March, 12 2026 15:00
+  deviceServiceVersion = 1013030
+
+  [+] When close() called from event handler - JPOS_E_ILEGAL exception thrown
+  
+********************************************************************************
+
   March, 10 2026 13:30
   deviceServiceVersion = 1013029
 
