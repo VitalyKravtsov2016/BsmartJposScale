@@ -204,6 +204,21 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         }
     }
 
+    /**
+     * Проверяет, что текущий поток не является потоком доставки событий.
+     * Вызов методов, изменяющих жизненный цикл устройства, из потока событий
+     * может привести к взаимной блокировке (deadlock).
+     *
+     * @throws JposException с кодом JPOS_E_ILLEGAL, если вызов из потока событий
+     */
+    private void checkNotInEventThread() throws JposException {
+        if (Thread.currentThread() == eventThread) {
+            logger.error("Method called from event handler thread - this would cause deadlock");
+            throw new JposException(JPOS_E_ILLEGAL, 
+                "Method cannot be called from event handler thread");
+        }
+    }
+
     // ======================== CAPABILITY СВОЙСТВА ========================
     @Override
     public boolean getCapCompareFirmwareVersion() throws JposException {
@@ -364,6 +379,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void setAsyncMode(boolean async) throws JposException {
         logger.debug("setAsyncMode(" + async + ")");
         checkOpened();
+        checkNotInEventThread(); // Защита от deadlock
 
         if (async == this.asyncMode) {
             logger.debug("setAsyncMode: no change");
@@ -443,6 +459,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void setTareWeight(int tareWeight) throws JposException {
         logger.debug("setTareWeight(" + tareWeight + ")");
         checkEnabled();
+        checkNotInEventThread(); // Защита от deadlock
 
         if (!getCapTareWeight()) {
             JposException e = new JposException(JPOS_E_ILLEGAL, "Tare weight not supported");
@@ -638,6 +655,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void close() throws JposException {
         logger.debug("close()");
         checkIdleState();
+        checkNotInEventThread(); // Защита от deadlock
 
         try {
             if (getDeviceEnabled()) {
@@ -669,6 +687,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
     public void claim(int timeout) throws JposException {
         logger.debug("claim(" + timeout + ")");
         checkOpened();
+        checkNotInEventThread(); // Защита от deadlock
 
         if (claimed) {
             logger.debug("claim: already claimed");
@@ -714,6 +733,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         logger.debug("release()");
         checkOpened();
         checkIdleState();
+        checkNotInEventThread(); // Защита от deadlock
 
         if (!claimed) {
             logger.debug("release: not claimed");
@@ -723,6 +743,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         try {
             scale.disconnect();
             claimed = false;
+            setState(JPOS_S_IDLE);
             logger.debug("release: OK");
         } catch (Exception e) {
             JposException je = getJposException(e);
@@ -736,6 +757,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         logger.debug("setDeviceEnabled(" + enabled + ")");
         checkClaimed();
         checkIdleState();
+        checkNotInEventThread(); // Защита от deadlock
 
         try {
             if (enabled) {
@@ -744,6 +766,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
                 salesPrice = 0;
 
                 deviceEnabled = true;
+                setState(JPOS_S_IDLE);
                 readScaleWeight();
                 setPowerState(JPOS_PS_ONLINE);
 
@@ -753,6 +776,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
 
             } else {
                 deviceEnabled = false;
+                setState(JPOS_S_IDLE);
                 setPowerState(JPOS_PS_UNKNOWN);
 
                 if (asyncMode) {
@@ -824,6 +848,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         logger.debug("readWeight(" + weightData + ", " + timeout + ")");
         checkEnabled();
         checkIdleState();
+        checkNotInEventThread();
 
         try {
             if (asyncMode) {
@@ -858,6 +883,7 @@ public class ScaleService extends Scale implements ScaleService113, ScaleConst, 
         logger.debug("zeroScale()");
         checkEnabled();
         checkIdleState();
+        checkNotInEventThread();
 
         if (!getCapZeroScale()) {
             JposException e = new JposException(JPOS_E_ILLEGAL, "Zero scale not supported");

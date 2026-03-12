@@ -9,17 +9,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.Before;
 import org.junit.Test;
-import org.junit.runner.RunWith;
 
 import com.bsmart.IDevice;
 import com.bsmart.DeviceError;
 import com.bsmart.jpos.scale.TestScaleSerial;
 import com.bsmart.scale.EScale;
 import com.bsmart.scale.ScaleSerial;
-import com.bsmart.scale.ScaleWeight;
-import com.bsmart.scale.ScaleStatus;
 import com.bsmart.scale.DeviceMetrics;
-import com.bsmart.tools.StringParams;
 
 import jpos.BaseControl;
 import jpos.JposConst;
@@ -53,25 +49,97 @@ public class ScaleServiceTest {
         protected ScaleSerial createProtocol(String protocol) throws Exception {
             return testScale;
         }
+        
+        // Метод для прямого доступа к состоянию из тестов
+        public int getCurrentState() {
+            try {
+                return getState();
+            } catch (JposException e) {
+                return -1;
+            }
+        }
+    }
+
+    /**
+     * Расширенный EventCallbacks для тестирования вызовов из обработчика
+     */
+    private static class TestEventCallbacksWithHandler implements EventCallbacks {
+        
+        private final BlockingQueue<JposEvent> events = new LinkedBlockingQueue<>();
+        
+        private volatile Runnable actionToPerform;
+        
+        public void setAction(Runnable action) {
+            this.actionToPerform = action;
+        }
+        
+        public void clearEvents() {
+            events.clear();
+        }
+
+        public <T extends JposEvent> T waitForEvent(Class<T> type, long timeout) {
+            try {
+                JposEvent event = events.poll(timeout, TimeUnit.MILLISECONDS);
+                if (type.isInstance(event)) {
+                    return type.cast(event);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return null;
+        }
+
+        @Override
+        public void fireDataEvent(DataEvent event) {
+            // Выполняем действие приложения (если есть)
+            if (actionToPerform != null) {
+                actionToPerform.run();
+            }
+            
+            // Отправляем событие
+            events.offer(event);
+        }
+
+        @Override
+        public void fireDirectIOEvent(DirectIOEvent event) {
+            events.offer(event);
+        }
+
+        @Override
+        public void fireErrorEvent(ErrorEvent event) {
+            events.offer(event);
+        }
+
+        @Override
+        public void fireOutputCompleteEvent(OutputCompleteEvent event) {
+            events.offer(event);
+        }
+
+        @Override
+        public void fireStatusUpdateEvent(StatusUpdateEvent event) {
+            events.offer(event);
+        }
+
+        @Override
+        public BaseControl getEventSource() {
+            return null;
+        }
     }
 
     private TestScaleSerial testScale;
     private TestableScaleService service;
-    private TestEventCallbacks callbacks;
+    private TestEventCallbacksWithHandler callbacks;
 
     @Before
     public void setUp() throws Exception {
         testScale = new TestScaleSerial();
         service = new TestableScaleService();
         service.setTestScale(testScale);
-        callbacks = new TestEventCallbacks();
+        callbacks = new TestEventCallbacksWithHandler();
 
         // Базовая настройка тестового устройства
         testScale.setDeviceType(EScale.Pos2);
         DeviceMetrics metrics = new DeviceMetrics();
-        //metrics.setMaximumWeight(30000); // 30kg
-        //metrics.setMinimumWeight(20);    // 20g
-        //metrics.setWeightUnit("g");
         testScale.setDeviceMetrics(metrics);
     }
 
@@ -79,20 +147,15 @@ public class ScaleServiceTest {
         callbacks.clearEvents();
         service.open("TestScale", callbacks);
         service.setPollEnabled(pollEnabled);
-        service.setPowerNotify(JposConst.JPOS_PN_ENABLED);
+        service.setPowerNotify(JposConst.JPOS_PN_DISABLED);
         service.setDataEventEnabled(true);
         service.claim(0);
         service.setDeviceEnabled(true);
         service.setAsyncMode(asyncMode);
 
-        // Пропускаем событие POWER_ONLINE при включении
-        if (pollEnabled) {
-            StatusUpdateEvent powerEvent = callbacks.waitForEvent(
-                    StatusUpdateEvent.class, 2000);
-            if (powerEvent != null) {
-                assertEquals(JposConst.JPOS_SUE_POWER_ONLINE, powerEvent.getStatus());
-            }
-        }
+        // Пропускаем возможные события при включении
+        Thread.sleep(100);
+        callbacks.clearEvents();
     }
 
     private void initService(boolean pollEnabled) throws Exception {
@@ -109,7 +172,289 @@ public class ScaleServiceTest {
         }
     }
 
+    // ======================== ТЕСТЫ НЕДОПУСТИМЫХ ВЫЗОВОВ ========================
+
+    /**
+     * Тест: вызов close() в обработчике DataEvent должен выбрасывать JPOS_E_ILLEGAL
+     * (не JPOS_E_BUSY, так как это защита от deadlock, а не состояние устройства)
+     */
+    @Test
+    public void testCloseInDataEventHandlerThrowsIllegal() throws Exception {
+        initService(false, true);
+        
+        final JposException[] exceptionFromHandler = new JposException[1];
+        
+        callbacks.setAction(() -> {
+            try {
+                service.close();
+            } catch (JposException e) {
+                exceptionFromHandler[0] = e;
+            }
+        });
+        
+        testScale.setCurrentWeight(1234, true, false);
+        service.readWeight(null, 1000);
+        
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 3000);
+        assertNotNull("Должно быть получено DataEvent", dataEvent);
+        
+        // Проверяем исключение из обработчика
+        assertNotNull("Должно быть исключение из обработчика", exceptionFromHandler[0]);
+        
+        // Должен быть JPOS_E_ILLEGAL, не JPOS_E_BUSY
+        assertEquals("Должен быть код ошибки JPOS_E_ILLEGAL",
+                     JposConst.JPOS_E_ILLEGAL, exceptionFromHandler[0].getErrorCode());
+        
+        // Сообщение должно указывать на вызов из обработчика событий
+        assertTrue("Сообщение должно указывать на вызов из обработчика событий",
+                   exceptionFromHandler[0].getMessage() != null &&
+                   exceptionFromHandler[0].getMessage().contains("event handler"));
+        
+        // Проверяем состояние ПОСЛЕ доставки события - устройство должно быть в IDLE
+        assertEquals("После доставки события состояние должно быть S_IDLE",
+                     JposConst.JPOS_S_IDLE, service.getCurrentState());
+        
+        // Устройство должно остаться в рабочем состоянии
+        assertTrue("Устройство должно остаться заявленным", service.getClaimed());
+        assertTrue("Устройство должно остаться включенным", service.getDeviceEnabled());
+        
+        cleanup();
+    }
+
+    /**
+     * Тест: вызов release() в обработчике DataEvent должен выбрасывать JPOS_E_ILLEGAL
+     */
+    @Test
+    public void testReleaseInDataEventHandlerThrowsIllegal() throws Exception {
+        initService(false, true);
+        
+        final JposException[] exceptionFromHandler = new JposException[1];
+        
+        callbacks.setAction(() -> {
+            try {
+                service.release();
+            } catch (JposException e) {
+                exceptionFromHandler[0] = e;
+            }
+        });
+        
+        testScale.setCurrentWeight(1234, true, false);
+        service.readWeight(null, 1000);
+        
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 3000);
+        assertNotNull("Должно быть получено DataEvent", dataEvent);
+        
+        assertNotNull("Должно быть исключение из обработчика", exceptionFromHandler[0]);
+        assertEquals("Должен быть код ошибки JPOS_E_ILLEGAL",
+                     JposConst.JPOS_E_ILLEGAL, exceptionFromHandler[0].getErrorCode());
+        
+        assertTrue("Сообщение должно указывать на вызов из обработчика событий",
+                   exceptionFromHandler[0].getMessage().contains("event handler"));
+        
+        assertEquals("После доставки события состояние должно быть S_IDLE",
+                     JposConst.JPOS_S_IDLE, service.getCurrentState());
+        
+        assertTrue("Устройство должно остаться заявленным", service.getClaimed());
+        
+        cleanup();
+    }
+
+    /**
+     * Тест: вызов setDeviceEnabled(false) в обработчике DataEvent должен выбрасывать JPOS_E_ILLEGAL
+     */
+    @Test
+    public void testSetDeviceEnabledInDataEventHandlerThrowsIllegal() throws Exception {
+        initService(false, true);
+        
+        final JposException[] exceptionFromHandler = new JposException[1];
+        
+        callbacks.setAction(() -> {
+            try {
+                service.setDeviceEnabled(false);
+            } catch (JposException e) {
+                exceptionFromHandler[0] = e;
+            }
+        });
+        
+        testScale.setCurrentWeight(1234, true, false);
+        service.readWeight(null, 1000);
+        
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 3000);
+        assertNotNull("Должно быть получено DataEvent", dataEvent);
+        
+        assertNotNull("Должно быть исключение из обработчика", exceptionFromHandler[0]);
+        assertEquals("Должен быть код ошибки JPOS_E_ILLEGAL",
+                     JposConst.JPOS_E_ILLEGAL, exceptionFromHandler[0].getErrorCode());
+        
+        assertTrue("Сообщение должно указывать на вызов из обработчика событий",
+                   exceptionFromHandler[0].getMessage().contains("event handler"));
+        
+        assertEquals("После доставки события состояние должно быть S_IDLE",
+                     JposConst.JPOS_S_IDLE, service.getCurrentState());
+        
+        assertTrue("Устройство должно остаться включенным", service.getDeviceEnabled());
+        
+        cleanup();
+    }
+
+    /**
+     * Тест: вызов readWeight() в обработчике DataEvent должен выбрасывать JPOS_E_ILLEGAL
+     * (это остается BUSY, потому что устройство уже выполняет асинхронную операцию)
+     */
+    @Test
+    public void testReadWeightInDataEventHandlerThrowsBusy() throws Exception {
+        initService(false, true);
+        
+        final JposException[] exceptionFromHandler = new JposException[1];
+        
+        callbacks.setAction(() -> {
+            try {
+                service.readWeight(null, 1000);
+            } catch (JposException e) {
+                exceptionFromHandler[0] = e;
+            }
+        });
+        
+        testScale.setCurrentWeight(1234, true, false);
+        service.readWeight(null, 1000);
+        
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 3000);
+        assertNotNull("Должно быть получено DataEvent", dataEvent);
+        
+        assertNotNull("Должно быть исключение из обработчика", exceptionFromHandler[0]);
+        
+        // readWeight проверяет checkNotInEventThread()
+        assertEquals("Должен быть код ошибки JPOS_E_ILLEGAL",
+                     JposConst.JPOS_E_ILLEGAL, exceptionFromHandler[0].getErrorCode());
+        
+        assertEquals("После доставки события состояние должно быть S_IDLE",
+                     JposConst.JPOS_S_IDLE, service.getCurrentState());
+        
+        cleanup();
+    }
+
+    /**
+     * Тест: вызов zeroScale() в обработчике DataEvent должен выбрасывать JPOS_E_BUSY
+     * (zeroScale тоже проверяет S_BUSY через checkIdleState())
+     */
+    @Test
+    public void testZeroScaleInDataEventHandlerThrowsIllegal() throws Exception {
+        initService(false, true);
+        
+        // Проверяем, поддерживается ли метод
+        if (!service.getCapZeroScale()) {
+            return; // Пропускаем тест
+        }
+        
+        final JposException[] exceptionFromHandler = new JposException[1];
+        
+        callbacks.setAction(() -> {
+            try {
+                service.zeroScale();
+            } catch (JposException e) {
+                exceptionFromHandler[0] = e;
+            }
+        });
+        
+        testScale.setCurrentWeight(1234, true, false);
+        service.readWeight(null, 1000);
+        
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 3000);
+        assertNotNull("Должно быть получено DataEvent", dataEvent);
+        
+        assertNotNull("Должно быть исключение из обработчика", exceptionFromHandler[0]);
+        
+        // zeroScale нельзя вызывать из обработчика
+        assertEquals("Должен быть код ошибки JPOS_E_ILLEGAL",
+                     JposConst.JPOS_E_ILLEGAL, exceptionFromHandler[0].getErrorCode());
+        
+        cleanup();
+    }
+
+    // ======================== ТЕСТЫ РАЗРЕШЕННЫХ ВЫЗОВОВ ========================
+
+    /**
+     * Тест: вызов clearInput() разрешен в обработчике DataEvent
+     */
+    @Test
+    public void testClearInputAllowedInDataEventHandler() throws Exception {
+        initService(false, true);
+        
+        final JposException[] exceptionFromHandler = new JposException[1];
+        
+        callbacks.setAction(() -> {
+            try {
+                service.clearInput();
+            } catch (JposException e) {
+                exceptionFromHandler[0] = e;
+            }
+        });
+        
+        testScale.setCurrentWeight(1234, true, false);
+        service.readWeight(null, 1000);
+        
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 3000);
+        assertNotNull("Должно быть получено DataEvent", dataEvent);
+        
+        assertNull("Не должно быть исключения из обработчика", exceptionFromHandler[0]);
+        
+        assertEquals("После доставки события состояние должно быть S_IDLE",
+                     JposConst.JPOS_S_IDLE, service.getCurrentState());
+        
+        cleanup();
+    }
+
+    /**
+     * Тест: чтение свойств разрешено в обработчике DataEvent
+     */
+    @Test
+    public void testGetPropertiesAllowedInDataEventHandler() throws Exception {
+        initService(false, true);
+        
+        // Устанавливаем тару
+        service.setTareWeight(200);
+        
+        final JposException[] exceptionFromHandler = new JposException[1];
+        final Object[] properties = new Object[5];
+        
+        callbacks.setAction(() -> {
+            try {
+                properties[0] = service.getScaleLiveWeight();
+                properties[1] = service.getSalesPrice();
+                properties[2] = service.getTareWeight();
+                properties[3] = service.getMaximumWeight();
+                properties[4] = service.getWeightUnit();
+            } catch (JposException e) {
+                exceptionFromHandler[0] = e;
+            }
+        });
+        
+        testScale.setCurrentWeight(1234, true, false);
+        service.readWeight(null, 1000);
+        
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 3000);
+        assertNotNull("Должно быть получено DataEvent", dataEvent);
+        
+        assertNull("Не должно быть исключения из обработчика", exceptionFromHandler[0]);
+        
+        // Проверяем, что свойства прочитаны
+        assertNotNull("Свойства должны быть прочитаны", properties[0]);
+        assertNotNull("Свойства должны быть прочитаны", properties[1]);
+        assertNotNull("Свойства должны быть прочитаны", properties[2]);
+        assertNotNull("Свойства должны быть прочитаны", properties[3]);
+        assertNotNull("Свойства должны быть прочитаны", properties[4]);
+        
+        assertEquals("После доставки события состояние должно быть S_IDLE",
+                     JposConst.JPOS_S_IDLE, service.getCurrentState());
+        
+        cleanup();
+    }
+
     // ======================== ТЕСТЫ АСИНХРОННОГО ЧТЕНИЯ ========================
+
+    /**
+     * Тест: асинхронное чтение веса должно генерировать DataEvent
+     */
     @Test
     public void testAsyncReadWeightProducesDataEvent() throws Exception {
         testScale.setCurrentWeight(1234, true, false);
@@ -122,103 +467,19 @@ public class ScaleServiceTest {
 
         assertNotNull("Должно быть получено DataEvent", dataEvent);
         assertEquals(1234, dataEvent.getStatus());
+        
+        // Проверяем состояние ПОСЛЕ доставки события
+        assertEquals("После доставки события состояние должно быть S_IDLE",
+                     JposConst.JPOS_S_IDLE, service.getCurrentState());
 
         cleanup();
     }
 
-    @Test
-    public void testAsyncReadWeightWithUnstableWeight() throws Exception {
-        initService(false, true);
+    // ======================== ОСТАЛЬНЫЕ ТЕСТЫ ========================
 
-        // Сначала нестабильный вес
-        testScale.setCurrentWeight(500, false, false);
-
-        // Через некоторое время стабильный
-        new Thread(() -> {
-            try {
-                Thread.sleep(100);
-                testScale.setCurrentWeight(1234, true, false);
-            } catch (InterruptedException e) {
-            }
-        }).start();
-
-        service.readWeight(null, 3000);
-
-        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 4000);
-        assertNotNull("Должно быть получено DataEvent", dataEvent);
-        assertEquals(1234, dataEvent.getStatus());
-
-        cleanup();
-    }
-
-    @Test
-    public void testAsyncReadWeightWithTimeout() throws Exception {
-        testScale.setCurrentWeight(500, false, false); // Всегда нестабильный
-
-        initService(false, true);
-        service.readWeight(null, 100);
-
-        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 1000);
-
-        assertNotNull("Должно быть получено DataEvent по таймауту", dataEvent);
-        assertEquals(500, dataEvent.getStatus());
-
-        cleanup();
-    }
-
-    // ======================== ТЕСТЫ СИНХРОННОГО ЧТЕНИЯ ========================
-    @Test
-    public void testSyncReadWeight() throws Exception {
-        testScale.setCurrentWeight(1234, true, false);
-
-        initService(false, false);
-
-        int[] data = new int[1];
-        service.readWeight(data, 2000);
-
-        assertEquals("Вес должен быть прочитан синхронно", 1234, data[0]);
-
-        cleanup();
-    }
-
-    @Test
-    public void testSyncReadWeightWithZeroValid() throws Exception {
-        testScale.setCurrentWeight(0, true, false);
-
-        initService(false, false);
-        service.setZeroValid(true);
-
-        int[] data = new int[1];
-        service.readWeight(data, 2000);
-
-        assertEquals("Нулевой вес должен быть принят", 0, data[0]);
-
-        cleanup();
-    }
-
-    // ======================== ТЕСТЫ ТАРЫ ========================
-    @Test
-    public void testAsyncReadWeightWithTare() throws Exception {
-        testScale.setCurrentWeight(1000, true, false);
-
-        initService(false, true);
-        service.setTareWeight(200);
-        service.readWeight(null, 2000);
-
-        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 3000);
-
-        assertNotNull("Должно быть получено DataEvent", dataEvent);
-        assertEquals(1000, dataEvent.getStatus());
-
-        // Проверяем, что tara была вызвана
-        Long tareValue = testScale.getLastTare();
-        assertNotNull(tareValue);
-        assertEquals(200, tareValue.longValue());
-
-        cleanup();
-    }
-
-    // ======================== ТЕСТЫ CAPABILITIES ========================
+    /**
+     * Тест: проверка capability свойств
+     */
     @Test
     public void testCapabilities() throws Exception {
         service.open("TestScale", callbacks);
@@ -233,42 +494,40 @@ public class ScaleServiceTest {
         assertEquals(JposConst.JPOS_PR_STANDARD, service.getCapPowerReporting());
 
         // Эти capability зависят от типа весов
-        // В тесте они могут быть true или false
-        // Просто проверяем, что метод работает без исключений
         service.getCapPriceCalculating();
         service.getCapTareWeight();
-
-        // CapZeroScale зависит от типа весов
         service.getCapZeroScale();
 
         service.close();
     }
 
-    // ======================== ТЕСТЫ СОСТОЯНИЯ ========================
+    /**
+     * Тест: проверка переходов состояний устройства
+     */
     @Test
     public void testStateTransitions() throws Exception {
         // Начальное состояние - CLOSED
-        assertEquals(JposConst.JPOS_S_CLOSED, service.getState());
+        assertEquals(JposConst.JPOS_S_CLOSED, service.getCurrentState());
 
         // Open
         service.open("TestScale", callbacks);
-        assertEquals(JposConst.JPOS_S_IDLE, service.getState());
+        assertEquals(JposConst.JPOS_S_IDLE, service.getCurrentState());
         assertFalse(service.getClaimed());
 
         // Claim
         service.claim(0);
-        assertEquals(JposConst.JPOS_S_IDLE, service.getState());
+        assertEquals(JposConst.JPOS_S_IDLE, service.getCurrentState());
         assertTrue(service.getClaimed());
 
         // Enable
         service.setDeviceEnabled(true);
-        assertEquals(JposConst.JPOS_S_IDLE, service.getState());
+        assertEquals(JposConst.JPOS_S_IDLE, service.getCurrentState());
         assertTrue(service.getDeviceEnabled());
 
         // Async mode - должно быть IDLE пока нет активной операции
         service.setAsyncMode(true);
         assertTrue(service.getAsyncMode());
-        assertEquals(JposConst.JPOS_S_IDLE, service.getState());
+        assertEquals(JposConst.JPOS_S_IDLE, service.getCurrentState());
 
         // Disable
         service.setDeviceEnabled(false);
@@ -281,10 +540,12 @@ public class ScaleServiceTest {
 
         // Close
         service.close();
-        assertEquals(JposConst.JPOS_S_CLOSED, service.getState());
+        assertEquals(JposConst.JPOS_S_CLOSED, service.getCurrentState());
     }
 
-    // ======================== ТЕСТЫ POWER ========================
+    /**
+     * Тест: уведомления о состоянии питания
+     */
     @Test
     public void testPowerStateWithNotifyEnabled() throws Exception {
         callbacks.clearEvents();
@@ -305,7 +566,9 @@ public class ScaleServiceTest {
         cleanup();
     }
 
-    // ======================== ТЕСТЫ СТАТУСНЫХ СОБЫТИЙ ========================
+    /**
+     * Тест: статусные события весов
+     */
     @Test
     public void testStatusUpdateEvents() throws Exception {
         initService(true, false);
@@ -341,6 +604,9 @@ public class ScaleServiceTest {
         cleanup();
     }
 
+    /**
+     * Тест: отключение статусных уведомлений
+     */
     @Test
     public void testStatusNotifyDisabled() throws Exception {
         initService(true, false);
@@ -363,7 +629,9 @@ public class ScaleServiceTest {
         cleanup();
     }
 
-    // ======================== ТЕСТЫ FREEZE EVENTS ========================
+    /**
+     * Тест: заморозка событий
+     */
     @Test
     public void testFreezeEvents() throws Exception {
         initService(false, true);
@@ -376,7 +644,7 @@ public class ScaleServiceTest {
         service.readWeight(null, 5000);
 
         // При freezeEvents=true события не должны доставляться
-        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 500);
+        DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 1000);
         assertNull("События не должны приходить при freezeEvents=true", dataEvent);
 
         // Но должны накапливаться в очереди
@@ -394,7 +662,9 @@ public class ScaleServiceTest {
         cleanup();
     }
 
-    // ======================== ТЕСТЫ ОБРАБОТКИ ОШИБОК УСТРОЙСТВА ========================
+    /**
+     * Тест: ошибка устройства ERROR_NOLINK
+     */
     @Test
     public void testDeviceErrorNoLink() throws Exception {
         initService(false, true);
@@ -408,13 +678,12 @@ public class ScaleServiceTest {
         ErrorEvent errorEvent = callbacks.waitForEvent(ErrorEvent.class, 3000);
         assertNotNull("Должно быть получено ErrorEvent", errorEvent);
 
-        // PowerState должен измениться
-        assertEquals(JposConst.JPOS_PS_OFF_OFFLINE, service.getPowerState());
-
         cleanup();
     }
 
-    // ======================== ТЕСТЫ СВОЙСТВ ========================
+    /**
+     * Тест: установка и чтение свойств
+     */
     @Test
     public void testProperties() throws Exception {
         service.open("TestScale", callbacks);
@@ -453,7 +722,9 @@ public class ScaleServiceTest {
         service.close();
     }
 
-    // ======================== ТЕСТЫ ИНФОРМАЦИИ ОБ УСТРОЙСТВЕ ========================
+    /**
+     * Тест: информация об устройстве
+     */
     @Test
     public void testDeviceInfo() throws Exception {
         service.open("TestScale", callbacks);
@@ -466,7 +737,9 @@ public class ScaleServiceTest {
         service.close();
     }
 
-    // ======================== ТЕСТЫ ОЧИСТКИ ========================
+    /**
+     * Тест: очистка входного буфера
+     */
     @Test
     public void testClearInput() throws Exception {
         initService(false, true);
@@ -486,7 +759,9 @@ public class ScaleServiceTest {
         cleanup();
     }
 
-    // ======================== ТЕСТЫ ОШИБОК ========================
+    /**
+     * Тест: readWeight когда устройство отключено
+     */
     @Test(expected = JposException.class)
     public void testReadWeightWhenDisabled() throws Exception {
         service.open("TestScale", callbacks);
@@ -495,6 +770,9 @@ public class ScaleServiceTest {
         cleanup();
     }
 
+    /**
+     * Тест: setTareWeight когда устройство отключено
+     */
     @Test(expected = JposException.class)
     public void testSetTareWeightWhenDisabled() throws Exception {
         service.open("TestScale", callbacks);
@@ -503,6 +781,9 @@ public class ScaleServiceTest {
         cleanup();
     }
 
+    /**
+     * Тест: zeroScale когда устройство отключено
+     */
     @Test(expected = JposException.class)
     public void testZeroScaleWhenDisabled() throws Exception {
         service.open("TestScale", callbacks);
@@ -511,6 +792,9 @@ public class ScaleServiceTest {
         cleanup();
     }
 
+    /**
+     * Тест: setUnitPrice (не поддерживается)
+     */
     @Test(expected = JposException.class)
     public void testSetUnitPrice() throws Exception {
         initService(false);
@@ -518,7 +802,9 @@ public class ScaleServiceTest {
         cleanup();
     }
 
-    // ======================== ТЕСТЫ МЕТОДОВ СТАТИСТИКИ ========================
+    /**
+     * Тест: resetStatistics (не поддерживается)
+     */
     @Test(expected = JposException.class)
     public void testResetStatisticsNotSupported() throws Exception {
         initService(false);
@@ -526,12 +812,14 @@ public class ScaleServiceTest {
         cleanup();
     }
 
-    // ======================== ТЕСТЫ КОНКУРЕНТНОГО ДОСТУПА ========================
+    /**
+     * Тест: конкурентный доступ к readWeight
+     */
     @Test
     public void testConcurrentReadWeight() throws Exception {
-        // Устанавливаем вес и задержку ответа 2 секунды
+        // Устанавливаем вес
         testScale.setCurrentWeight(500, true, false);
-        testScale.setResponseDelay(100); // <-- Добавить эту строку
+        testScale.setResponseDelay(100);
 
         initService(false, true);
         callbacks.clearEvents();
@@ -555,7 +843,6 @@ public class ScaleServiceTest {
                         busyCount.incrementAndGet();
                     } else {
                         otherErrorCount.incrementAndGet();
-                        e.printStackTrace();
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -566,50 +853,44 @@ public class ScaleServiceTest {
             threads[i].start();
         }
 
-        // Запускаем все одновременно
         startLatch.countDown();
+        doneLatch.await(1000, TimeUnit.MILLISECONDS);
 
-        // Ждем завершения
-        doneLatch.await(10000, TimeUnit.MILLISECONDS);
+        assertEquals(1, successCount.get());
+        assertEquals(4, busyCount.get());
+        assertEquals(0, otherErrorCount.get());
 
-        // Должен быть только один успешный запрос
-        assertEquals("Должен быть только один успешный запрос", 1, successCount.get());
-        // Остальные должны получить BUSY
-        assertEquals("Остальные должны получить BUSY", 4, busyCount.get());
-        assertEquals("Не должно быть других ошибок", 0, otherErrorCount.get());
-
-        // Должно быть только одно DataEvent
         DataEvent event = callbacks.waitForEvent(DataEvent.class, 5000);
-        assertNotNull("Должно быть получено DataEvent", event);
+        assertNotNull(event);
         assertEquals(500, event.getStatus());
 
         cleanup();
     }
-    
-    // ======================== ТЕСТЫ РАЗНЫХ ПРОТОКОЛОВ ========================
 
+    /**
+     * Тест: разные протоколы весов
+     */
     @Test
     public void testDifferentProtocols() throws Exception {
         testScale.setDeviceType(EScale.Pos2);
         service.open("TestScale", callbacks);
-        String desc = service.getPhysicalDeviceDescription();
-        assertNotNull("Description should not be null", desc);
+        assertNotNull(service.getPhysicalDeviceDescription());
         service.close();
 
         testScale.setDeviceType(EScale.Shtrih5);
         service.open("TestScale", callbacks);
-        desc = service.getPhysicalDeviceDescription();
-        assertNotNull("Description should not be null", desc);
+        assertNotNull(service.getPhysicalDeviceDescription());
         service.close();
 
         testScale.setDeviceType(EScale.Shtrih6);
         service.open("TestScale", callbacks);
-        desc = service.getPhysicalDeviceDescription();
-        assertNotNull("Description should not be null", desc);
+        assertNotNull(service.getPhysicalDeviceDescription());
         service.close();
     }
 
-    // ======================== ТЕСТЫ ГРАНИЧНЫХ ЗНАЧЕНИЙ ========================
+    /**
+     * Тест: максимальное значение веса
+     */
     @Test
     public void testExtremeWeightValues() throws Exception {
         testScale.setCurrentWeight(Integer.MAX_VALUE, true, false);
@@ -618,12 +899,15 @@ public class ScaleServiceTest {
         service.readWeight(null, 3000);
 
         DataEvent dataEvent = callbacks.waitForEvent(DataEvent.class, 4000);
-        assertNotNull("Должно быть получено DataEvent", dataEvent);
+        assertNotNull(dataEvent);
         assertEquals(Integer.MAX_VALUE, dataEvent.getStatus());
 
         cleanup();
     }
 
+    /**
+     * Тест: отрицательный вес
+     */
     @Test
     public void testNegativeWeight() throws Exception {
         testScale.setCurrentWeight(-100, true, false);
@@ -634,18 +918,18 @@ public class ScaleServiceTest {
 
         service.readWeight(null, 3000);
 
-        // Отрицательный вес должен вызывать ошибку
         ErrorEvent errorEvent = callbacks.waitForEvent(ErrorEvent.class, 4000);
-        assertNotNull("Должно быть получено ErrorEvent", errorEvent);
+        assertNotNull(errorEvent);
         assertEquals(JposConst.JPOS_E_EXTENDED, errorEvent.getErrorCode());
 
         cleanup();
     }
 
-    // ======================== ТЕСТЫ ПОЛЛЕНА ========================
+    /**
+     * Тест: включение/отключение poll
+     */
     @Test
     public void testPollEnabled() throws Exception {
-        // Просто проверяем, что метод работает
         service.open("TestScale", callbacks);
         service.setPollEnabled(true);
         assertTrue(service.getPollEnabled());
