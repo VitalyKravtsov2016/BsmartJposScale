@@ -2,7 +2,7 @@ allprojects {
     apply plugin: 'java'
     apply plugin: 'idea'
 
-    version = '1.30'
+    version = '1.31'
     
     sourceCompatibility = '1.8'
     targetCompatibility = '1.8'

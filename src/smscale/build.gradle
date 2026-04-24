@@ -49,7 +49,8 @@ dependencies {
     implementation 'log4j-api:log4j-api:2.25.1'
     implementation 'log4j-core:log4j-core:2.25.1'
     implementation 'nrjavaserial:nrjavaserial:3.9.3'
-
+    implementation 'xerces:xercesImpl:2.12.2'
+    
     // Зависимости для тестов
     testImplementation 'org.hamcrest:hamcrest-core:1.3'
     testImplementation 'junit:junit:4.13.2'
