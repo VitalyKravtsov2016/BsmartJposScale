@@ -73,7 +73,9 @@ jar {
     manifest {
         attributes(
             "Implementation-Title": "BSmart.JavaPOS",
-            "Class-Path": configurations.compileClasspath.collect { it.getName() }.join(' '),
+            "Class-Path": configurations.compileClasspath.collect { it.getName() }.findAll { 
+                !it.contains('xerces') && !it.contains('xml-apis')
+            }.join(' '),
             "Implementation-Version": version
         )
     }
