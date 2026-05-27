@@ -74,7 +74,7 @@ jar {
         attributes(
             "Implementation-Title": "BSmart.JavaPOS",
             "Class-Path": configurations.compileClasspath.collect { it.getName() }.findAll { 
-                !it.contains('xerces') && !it.contains('xml-apis')
+                !it.contains('xerces') && !it.contains('xml-apis') && !it.contains('log4j')
             }.join(' '),
             "Implementation-Version": version
         )
