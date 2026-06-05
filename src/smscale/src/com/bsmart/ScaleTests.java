@@ -39,6 +39,7 @@ public class ScaleTests implements DataListener {
                 scale.claim(1000);
                 scale.setDeviceEnabled(true);
                 scale.setAsyncMode(false);
+                scale.setZeroValid(true);
 
                 int[] weight = new int[1];
 
